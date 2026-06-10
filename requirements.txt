@@ -1,0 +1,11 @@
+opencv-python
+numpy
+pyserial
+gpiozero
+ai-edge-litert
+
+# Fallback if ai-edge-litert is unavailable:
+# tensorflow
+
+# picamera2 must be installed via system package manager:
+# sudo apt install python3-picamera2
