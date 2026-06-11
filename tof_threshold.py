@@ -24,8 +24,8 @@ except ImportError:
 # ==========================================
 XSHUT_LEFT   = 24
 XSHUT_RIGHT  = 25
-IRQ_LEFT     = 5    # Sensor GPIO1 -> Pi-Eingang
-IRQ_RIGHT    = 6
+IRQ_LEFT     = 6    # Sensor GPIO1 -> Pi-Eingang
+IRQ_RIGHT    = 5
 ADDR_LEFT    = 0x2A
 ADDR_RIGHT   = 0x2B
 
