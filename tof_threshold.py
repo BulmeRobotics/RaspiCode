@@ -28,8 +28,8 @@ ADDR_LEFT    = 0x2A
 ADDR_RIGHT   = 0x2B
 
 THRESHOLD_MM   = 200
-TIMING_BUDGET  = 20000  # us — Messzeit pro Sample (min ~20ms, default 33ms)
-POLL_INTERVAL  = 0.025  # s  — Abfrageintervall (< TIMING_BUDGET macht keinen Sinn)
+TIMING_BUDGET  = 33000  # us — Messzeit pro Sample (min ~20ms, default 33ms)
+POLL_INTERVAL  = 0.05   # s  — Abfrageintervall (< TIMING_BUDGET macht keinen Sinn)
 VERBOSE        = True   # Messwerte ausgeben
 
 # ==========================================
