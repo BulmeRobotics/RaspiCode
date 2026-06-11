@@ -22,17 +22,61 @@ except ImportError:
 # ==========================================
 # 2. KONFIGURATION
 # ==========================================
-XSHUT_LEFT   = 24
-XSHUT_RIGHT  = 25
-ADDR_LEFT    = 0x2A
-ADDR_RIGHT   = 0x2B
+XSHUT_LEFT    = 24
+XSHUT_RIGHT   = 25
+ADDR_LEFT     = 0x2A
+ADDR_RIGHT    = 0x2B
 
-THRESHOLD_MM   = 200
-POLL_INTERVAL = 0.05   # s
-VERBOSE        = True   # Messwerte ausgeben
+THRESHOLD_MM  = 200
+POLL_INTERVAL = 0.03   # s
+VERBOSE       = True
+
+# VL53L0X-Register fuer nicht-blockierendes Lesen
+_REG_INT_STATUS = 0x13  # bits[2:0]: 0x04 = neue Messung bereit
+_REG_INT_CLEAR  = 0x0B
+_REG_RANGE      = 0x1E  # uint16 big-endian, mm
 
 # ==========================================
-# 3. SENSOR-SETUP
+# 3. RAW I2C HELPERS
+# ==========================================
+def _wr(i2c, addr, data):
+    while not i2c.try_lock():
+        pass
+    try:
+        i2c.writeto(addr, bytes(data))
+    finally:
+        i2c.unlock()
+
+def _rd1(i2c, addr, reg):
+    buf = bytearray(1)
+    while not i2c.try_lock():
+        pass
+    try:
+        i2c.writeto_then_readfrom(addr, bytes([reg]), buf)
+    finally:
+        i2c.unlock()
+    return buf[0]
+
+def _rd2(i2c, addr, reg):
+    buf = bytearray(2)
+    while not i2c.try_lock():
+        pass
+    try:
+        i2c.writeto_then_readfrom(addr, bytes([reg]), buf)
+    finally:
+        i2c.unlock()
+    return (buf[0] << 8) | buf[1]
+
+def _read_nb(i2c, addr):
+    """Nicht-blockierend: gibt Distanz in mm zurueck wenn Messung fertig, sonst None."""
+    if (_rd1(i2c, addr, _REG_INT_STATUS) & 0x07) != 0x04:
+        return None
+    dist = _rd2(i2c, addr, _REG_RANGE)
+    _wr(i2c, addr, [_REG_INT_CLEAR, 0x01])
+    return dist
+
+# ==========================================
+# 4. SENSOR-SETUP
 # ==========================================
 def _try_connect(i2c, addr):
     try:
@@ -41,10 +85,6 @@ def _try_connect(i2c, addr):
         return None
 
 def setup_sensors(i2c):
-    """
-    Robust gegen Neustart: Wenn Sensoren bereits bei 0x2A/0x2B sind,
-    werden sie direkt verwendet ohne erneute Adressvergabe.
-    """
     xshut_left  = DigitalOutputDevice(XSHUT_LEFT,  initial_value=False)
     xshut_right = DigitalOutputDevice(XSHUT_RIGHT, initial_value=False)
     time.sleep(0.2)
@@ -76,10 +116,14 @@ def setup_sensors(i2c):
         right.set_address(ADDR_RIGHT)
         print(f"Rechts: 0x29 -> 0x{ADDR_RIGHT:02X}")
 
+    # Kontinuierliches Ranging starten - beide Sensoren messen ab jetzt autonom
+    left.start_continuous()
+    right.start_continuous()
+
     return left, right, (xshut_left, xshut_right)
 
 # ==========================================
-# 4. MAIN
+# 5. MAIN
 # ==========================================
 def main():
     i2c = busio.I2C(board.SCL, board.SDA)
@@ -87,28 +131,28 @@ def main():
 
     print()
     print("=" * 44)
-    print(f"  VL53L0X Polling | Schwelle: < {THRESHOLD_MM} mm")
+    print(f"  VL53L0X | Schwelle: < {THRESHOLD_MM} mm | {int(POLL_INTERVAL * 1000)} ms")
     print("=" * 44)
+
+    results = {"L": 0, "R": 0}
 
     try:
         while True:
-            results = {}
-            for label, sensor in (("L", left), ("R", right)):
-                try:
-                    dist = sensor.range
-                except Exception as e:
-                    print(f"[{label}] Lesefehler: {e}")
-                    results[label] = 0
-                    continue
-                results[label] = 1 if dist < THRESHOLD_MM else 0
+            # Beide Sensoren nicht-blockierend lesen — kein sensor wartet auf den anderen
+            for label, addr in (("L", ADDR_LEFT), ("R", ADDR_RIGHT)):
+                dist = _read_nb(i2c, addr)
+                if dist is not None:
+                    results[label] = 1 if dist < THRESHOLD_MM else 0
 
             if VERBOSE:
-                print(f"L {results.get('L', 0)}  R {results.get('R', 0)}")
+                print(f"L {results['L']}  R {results['R']}")
 
             time.sleep(POLL_INTERVAL)
 
     except KeyboardInterrupt:
         print("\nBeendet.")
+        left.stop_continuous()
+        right.stop_continuous()
 
 
 if __name__ == "__main__":
