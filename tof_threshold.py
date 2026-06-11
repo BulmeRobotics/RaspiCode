@@ -106,7 +106,13 @@ class VL6180X:
 
     # Sensor-Identitaet pruefen (Model-ID muss 0xB4 sein)
     def check_present(self):
-        return self.read8(IDENTIFICATION__MODEL_ID) == 0xB4
+        try:
+            val = self.read8(IDENTIFICATION__MODEL_ID)
+            print(f"  Model-ID @ 0x{self.address:02X}: 0x{val:02X} (erwartet 0xB4)")
+            return val == 0xB4
+        except OSError as e:
+            print(f"  I2C-Fehler @ 0x{self.address:02X}: {e}")
+            return False
 
     # I2C-Adresse umschreiben (7-Bit). Danach self.address aktualisieren.
     def set_address(self, new_address):
@@ -174,27 +180,32 @@ def setup_sensors(bus):
     # Beide Sensoren in den Reset zwingen
     xshut_left.off()
     xshut_right.off()
-    time.sleep(0.02)
+    time.sleep(0.05)
+    print("Beide XSHUT LOW (Reset)")
 
     # --- Linken Sensor hochfahren und umadressieren ---
     xshut_left.on()
-    time.sleep(0.1)              # Boot-Zeit
+    time.sleep(0.1)
+    print(f"XSHUT Links ({XSHUT_LEFT}) HIGH -> pruefe 0x{ADDR_DEFAULT:02X}...")
     left = VL6180X(bus, ADDR_DEFAULT)
     if not left.check_present():
         print("Fehler: Linker Sensor antwortet nicht auf 0x29.")
         sys.exit()
     left.set_address(ADDR_LEFT)
     left.init()
+    print(f"Linker Sensor umadressiert auf 0x{ADDR_LEFT:02X}")
 
     # --- Rechten Sensor hochfahren (jetzt eindeutig, da links umadressiert) ---
     xshut_right.on()
     time.sleep(0.1)
+    print(f"XSHUT Rechts ({XSHUT_RIGHT}) HIGH -> pruefe 0x{ADDR_DEFAULT:02X}...")
     right = VL6180X(bus, ADDR_DEFAULT)
     if not right.check_present():
         print("Fehler: Rechter Sensor antwortet nicht auf 0x29.")
         sys.exit()
     right.set_address(ADDR_RIGHT)
     right.init()
+    print(f"Rechter Sensor umadressiert auf 0x{ADDR_RIGHT:02X}")
 
     # XSHUT-Objekte zurueckgeben, damit sie nicht vom Garbage Collector
     # eingesammelt werden (sonst fallen die Pins auf LOW = Reset).
