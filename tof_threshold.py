@@ -1,5 +1,6 @@
 import time
 import sys
+import threading
 
 # ==========================================
 # 1. IMPORTS
@@ -29,15 +30,21 @@ ADDR_RIGHT    = 0x2B
 
 THRESHOLD_MM  = 200
 POLL_INTERVAL = 0.03   # s
-VERBOSE       = True
-
-# VL53L0X-Register fuer nicht-blockierendes Lesen
-_REG_INT_STATUS = 0x13  # bits[2:0]: 0x04 = neue Messung bereit
-_REG_INT_CLEAR  = 0x0B
-_REG_RANGE      = 0x1E  # uint16 big-endian, mm
+VERBOSE       = False  # Im Thread-Modus standardmaessig stumm
 
 # ==========================================
-# 3. RAW I2C HELPERS
+# 3. OEFFENTLICHER ZUSTAND
+# Zugriff von aussen: tof_threshold.state["L"] / tof_threshold.state["R"]
+# ==========================================
+state = {"L": 0, "R": 0}
+
+# VL53L0X-Register
+_REG_INT_STATUS = 0x13
+_REG_INT_CLEAR  = 0x0B
+_REG_RANGE      = 0x1E
+
+# ==========================================
+# 4. RAW I2C HELPERS
 # ==========================================
 def _wr(i2c, addr, data):
     while not i2c.try_lock():
@@ -68,7 +75,6 @@ def _rd2(i2c, addr, reg):
     return (buf[0] << 8) | buf[1]
 
 def _read_nb(i2c, addr):
-    """Nicht-blockierend: gibt Distanz in mm zurueck wenn Messung fertig, sonst None."""
     if (_rd1(i2c, addr, _REG_INT_STATUS) & 0x07) != 0x04:
         return None
     dist = _rd2(i2c, addr, _REG_RANGE)
@@ -76,7 +82,7 @@ def _read_nb(i2c, addr):
     return dist
 
 # ==========================================
-# 4. SENSOR-SETUP
+# 5. SENSOR-SETUP
 # ==========================================
 def _try_connect(i2c, addr):
     try:
@@ -84,76 +90,78 @@ def _try_connect(i2c, addr):
     except Exception:
         return None
 
-def setup_sensors(i2c):
+def _setup_sensors(i2c):
     xshut_left  = DigitalOutputDevice(XSHUT_LEFT,  initial_value=False)
     xshut_right = DigitalOutputDevice(XSHUT_RIGHT, initial_value=False)
     time.sleep(0.2)
-    print("Beide XSHUT LOW")
 
     xshut_left.on()
     time.sleep(0.1)
     left = _try_connect(i2c, ADDR_LEFT)
     if left:
-        print(f"Links: bereits bei 0x{ADDR_LEFT:02X}")
+        print(f"ToF Links: bereits bei 0x{ADDR_LEFT:02X}")
     else:
         left = _try_connect(i2c, 0x29)
         if left is None:
-            print("Fehler: Linker Sensor nicht gefunden.")
+            print("Fehler: Linker ToF-Sensor nicht gefunden.")
             sys.exit(1)
         left.set_address(ADDR_LEFT)
-        print(f"Links: 0x29 -> 0x{ADDR_LEFT:02X}")
+        print(f"ToF Links: 0x29 -> 0x{ADDR_LEFT:02X}")
 
     xshut_right.on()
     time.sleep(0.1)
     right = _try_connect(i2c, ADDR_RIGHT)
     if right:
-        print(f"Rechts: bereits bei 0x{ADDR_RIGHT:02X}")
+        print(f"ToF Rechts: bereits bei 0x{ADDR_RIGHT:02X}")
     else:
         right = _try_connect(i2c, 0x29)
         if right is None:
-            print("Fehler: Rechter Sensor nicht gefunden.")
+            print("Fehler: Rechter ToF-Sensor nicht gefunden.")
             sys.exit(1)
         right.set_address(ADDR_RIGHT)
-        print(f"Rechts: 0x29 -> 0x{ADDR_RIGHT:02X}")
+        print(f"ToF Rechts: 0x29 -> 0x{ADDR_RIGHT:02X}")
 
-    # Kontinuierliches Ranging starten - beide Sensoren messen ab jetzt autonom
     left.start_continuous()
     right.start_continuous()
-
     return left, right, (xshut_left, xshut_right)
 
 # ==========================================
-# 5. MAIN
+# 6. THREAD
 # ==========================================
-def main():
+_thread = None
+
+def _loop(i2c, left, right, xshut):
+    while True:
+        for label, addr in (("L", ADDR_LEFT), ("R", ADDR_RIGHT)):
+            dist = _read_nb(i2c, addr)
+            if dist is not None:
+                state[label] = 1 if dist < THRESHOLD_MM else 0
+        if VERBOSE:
+            print(f"L {state['L']}  R {state['R']}")
+        time.sleep(POLL_INTERVAL)
+
+def start():
+    """Sensoren initialisieren und Poll-Loop als Daemon-Thread starten."""
+    global _thread
+    if _thread and _thread.is_alive():
+        return  # bereits gestartet
     i2c = busio.I2C(board.SCL, board.SDA)
-    left, right, _xshut = setup_sensors(i2c)
+    left, right, xshut = _setup_sensors(i2c)
+    _thread = threading.Thread(target=_loop, args=(i2c, left, right, xshut),
+                               daemon=True)
+    _thread.start()
+    print("ToF-Thread gestartet.")
 
-    print()
-    print("=" * 44)
-    print(f"  VL53L0X | Schwelle: < {THRESHOLD_MM} mm | {int(POLL_INTERVAL * 1000)} ms")
-    print("=" * 44)
-
-    results = {"L": 0, "R": 0}
-
+# ==========================================
+# 7. STANDALONE
+# ==========================================
+if __name__ == "__main__":
+    VERBOSE = True
+    start()
+    print(f"Schwelle: < {THRESHOLD_MM} mm | Intervall: {int(POLL_INTERVAL * 1000)} ms")
+    print("Ctrl+C zum Beenden.\n")
     try:
         while True:
-            # Beide Sensoren nicht-blockierend lesen — kein sensor wartet auf den anderen
-            for label, addr in (("L", ADDR_LEFT), ("R", ADDR_RIGHT)):
-                dist = _read_nb(i2c, addr)
-                if dist is not None:
-                    results[label] = 1 if dist < THRESHOLD_MM else 0
-
-            if VERBOSE:
-                print(f"L {results['L']}  R {results['R']}")
-
-            time.sleep(POLL_INTERVAL)
-
+            time.sleep(1)
     except KeyboardInterrupt:
         print("\nBeendet.")
-        left.stop_continuous()
-        right.stop_continuous()
-
-
-if __name__ == "__main__":
-    main()
