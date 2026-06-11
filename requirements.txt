@@ -3,6 +3,7 @@ numpy
 pyserial
 gpiozero
 ai-edge-litert
+smbus2
 
 # Fallback if ai-edge-litert is unavailable:
 # tensorflow

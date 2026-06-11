@@ -23,8 +23,8 @@ I2C_BUS = 1                  # Standard-I2C-Bus am Raspberry Pi (Pins SDA1/SCL1)
 
 # XSHUT (= GPIO0/CE am Sensor): zum sequenziellen Hochfahren fuer die Adressvergabe.
 # LOW = Sensor im Reset/Standby, HIGH = Sensor aktiv.
-XSHUT_LEFT = 23
-XSHUT_RIGHT = 24
+XSHUT_LEFT = 24
+XSHUT_RIGHT = 25
 
 # GPIO1-Interrupt-Ausgaenge der Sensoren -> Pi-Eingaenge.
 # GPIO1 ist Open-Drain: braucht Pull-up (hier intern via gpiozero aktiviert).
