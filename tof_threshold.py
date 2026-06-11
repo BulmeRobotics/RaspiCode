@@ -94,13 +94,12 @@ def main():
         while True:
             for label, sensor in (("L", left), ("R", right)):
                 try:
-                    dist   = sensor.range
-                    status = sensor.range_status
+                    dist = sensor.range
                 except Exception as e:
                     print(f"[{label}] Lesefehler: {e}")
                     continue
 
-                if status != 0 or dist <= 0 or dist >= MAX_VALID_MM:
+                if dist <= 0 or dist >= MAX_VALID_MM:
                     print(f"{label} OOR")
                 elif dist < THRESHOLD_MM:
                     print(f"{label} LOW")
