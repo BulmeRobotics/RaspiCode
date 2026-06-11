@@ -56,11 +56,51 @@ For circular cognitive targets, the code detects the contour of the bullseye, ap
 
 A result is only transmitted after 5 consistent detections within a 3-second window to avoid false positives.
 
+## ToF Proximity Sensors
+
+Two **VL53L0X** time-of-flight sensors are mounted next to the cameras to detect nearby walls or obstacles. They run in a background thread via `tof.py` and are non-blocking — both sensors are polled simultaneously so neither waits for the other.
+
+### Usage
+
+```python
+import tof
+
+tof.start()               # initializes sensors and starts background thread
+
+tof.state["L"]            # 1 = object closer than threshold, 0 = clear
+tof.state["R"]
+
+tof.raw["L"]              # last measured distance in mm
+tof.raw["R"]
+
+tof.set_threshold(150)    # change threshold at runtime (resets to THRESHOLD_MM on restart)
+```
+
+### Pin Assignment
+
+| Signal       | GPIO |
+|--------------|------|
+| XSHUT left   | 24   |
+| XSHUT right  | 25   |
+| IRQ left     | 5    |
+| IRQ right    | 6    |
+| SDA          | 2    |
+| SCL          | 3    |
+
+The sensors start at the default I2C address `0x29` and are reassigned to `0x2A` (left) and `0x2B` (right) on startup. The script handles restarts gracefully — if the sensors already hold their assigned addresses (XSHUT did not reset them), they are reused directly without re-initialization.
+
+### Resource Usage
+
+The ToF thread uses ~0% CPU and ~22 MB RAM. It has no measurable impact on camera detection throughput.
+
 ## Files
 
 | File                   | Purpose                                              |
 |------------------------|------------------------------------------------------|
-| `mainWM.py`            | Main detection loop — dual-camera threads, serial I/O|
+| `main.py`              | Main detection loop — dual-camera threads, serial I/O|
+| `tof.py`               | VL53L0X proximity sensor module (background thread)  |
+| `tof_example.py`       | Minimal usage example for `tof.py`                   |
+| `tof_diag.py`          | I2C diagnostic script                                |
 | `datensatzGenerator.py`| Captures training images from a live camera feed     |
 | `trained.tflite`       | Quantized TFLite model for letter detection          |
 | `labels.txt`           | Class labels: background, H, S, U                   |
@@ -69,6 +109,7 @@ A result is only transmitted after 5 consistent detections within a 3-second win
 
 - Raspberry Pi (with GPIO)
 - 2× Raspberry Pi Camera (Picamera2 API)
+- 2× VL53L0X ToF distance sensor
 - Serial connection to main robot controller (Arduino)
 
 ## Setup
