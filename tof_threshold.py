@@ -2,267 +2,109 @@ import time
 import sys
 
 # ==========================================
-# 1. IMPORT-BLOCK
+# 1. IMPORTS
 # ==========================================
 try:
-    from smbus2 import SMBus, i2c_msg
+    import VL53L0X
 except ImportError:
-    print("Fehler: smbus2 fehlt. Bitte mit 'pip install smbus2' installieren.")
-    sys.exit()
+    print("Fehler: VL53L0X fehlt.")
+    print("  pip install VL53L0X --break-system-packages")
+    sys.exit(1)
 
 try:
-    from gpiozero import DigitalOutputDevice, DigitalInputDevice
+    from gpiozero import DigitalOutputDevice
 except ImportError:
     print("Fehler: gpiozero fehlt (nur auf dem Raspberry Pi verfuegbar).")
-    sys.exit()
+    sys.exit(1)
 
 # ==========================================
 # 2. KONFIGURATION
 # ==========================================
-I2C_BUS = 1                  # Standard-I2C-Bus am Raspberry Pi (Pins SDA1/SCL1)
+I2C_BUS      = 1
+XSHUT_LEFT   = 24     # GPIO-Pin fuer XSHUT des linken Sensors
+XSHUT_RIGHT  = 25     # GPIO-Pin fuer XSHUT des rechten Sensors
+ADDR_DEFAULT = 0x29   # Werksadresse beider Sensoren
+ADDR_LEFT    = 0x2A   # Neue Adresse linker Sensor
+ADDR_RIGHT   = 0x2B   # Neue Adresse rechter Sensor
 
-# XSHUT (= GPIO0/CE am Sensor): zum sequenziellen Hochfahren fuer die Adressvergabe.
-# LOW = Sensor im Reset/Standby, HIGH = Sensor aktiv.
-XSHUT_LEFT = 24
-XSHUT_RIGHT = 25
-
-# GPIO1-Interrupt-Ausgaenge der Sensoren -> Pi-Eingaenge.
-# GPIO1 ist Open-Drain: braucht Pull-up (hier intern via gpiozero aktiviert).
-IRQ_LEFT = 5
-IRQ_RIGHT = 6
-
-# I2C-Adressen. Beide Sensoren starten auf 0x29 und werden umadressiert.
-ADDR_DEFAULT = 0x29
-ADDR_LEFT = 0x2A
-ADDR_RIGHT = 0x2B
-
-# Schwellwert: GPIO1 wird AKTIV, wenn die Distanz KLEINER als dieser Wert ist.
-# Gueltig 0-255 mm (bei Scaling 1, dem Default).
-THRESHOLD_MM = 60
-
-# Continuous-Mode-Timing.
-# Regel aus dem Datenblatt: max_convergence_time + 5 <= intermeasurement * 0.9
-MAX_CONVERGENCE_TIME = 30    # ms (1-63)
-INTERMEASUREMENT_MS = 50     # ms zwischen Messungen (Vielfaches von 10)
-
-# Polaritaet des GPIO1-Interrupt-Ausgangs (Open-Drain).
-#   False = Active-Low  -> Objekt nah = Leitung LOW,  frei = HIGH (Pull-up)
-#   True  = Active-High
-GPIO1_ACTIVE_HIGH = False
+THRESHOLD_MM  = 60    # Schwellwert in mm
+POLL_INTERVAL = 0.05  # Abfrageintervall in Sekunden
+MAX_VALID_MM  = 1200  # Oberhalb = ausser Reichweite / Messfehler
 
 # ==========================================
-# 3. VL6180X REGISTER (16-Bit-Index!)
+# 3. SENSOR-SETUP
 # ==========================================
-# Wichtig: Der VL6180X adressiert seine Register mit einem 16-Bit-Index.
-# Deshalb funktionieren die ueblichen SMBus-Funktionen (8-Bit-Register) NICHT
-# und es wird hier mit rohen I2C-Transaktionen (i2c_msg) gearbeitet.
-SYSTEM__FRESH_OUT_OF_RESET        = 0x016
-SYSTEM__MODE_GPIO1                = 0x011
-SYSTEM__INTERRUPT_CONFIG_GPIO     = 0x014
-SYSTEM__INTERRUPT_CLEAR           = 0x015
-SYSRANGE__START                   = 0x018
-SYSRANGE__THRESH_HIGH             = 0x019
-SYSRANGE__THRESH_LOW              = 0x01A
-SYSRANGE__INTERMEASUREMENT_PERIOD = 0x01B
-SYSRANGE__MAX_CONVERGENCE_TIME    = 0x01C
-RESULT__RANGE_STATUS              = 0x04D
-RESULT__INTERRUPT_STATUS_GPIO     = 0x04F
-RESULT__RANGE_VAL                 = 0x062
-READOUT__AVERAGING_SAMPLE_PERIOD  = 0x10A
-I2C_SLAVE__DEVICE_ADDRESS         = 0x212
-IDENTIFICATION__MODEL_ID          = 0x000
-
-# Pflicht-Tuning-Sequenz nach jedem Reset (ST AN4545 / Pololu configureDefault).
-# Ohne diese Werte liefert das Ranging unbrauchbare Ergebnisse.
-SR03_INIT = [
-    (0x0207, 0x01), (0x0208, 0x01), (0x0096, 0x00), (0x0097, 0xFD),
-    (0x00E3, 0x00), (0x00E4, 0x04), (0x00E5, 0x02), (0x00E6, 0x01),
-    (0x00E7, 0x03), (0x00F5, 0x02), (0x00D9, 0x05), (0x00DB, 0xCE),
-    (0x00DC, 0x03), (0x00DD, 0xF8), (0x009F, 0x00), (0x00A3, 0x3C),
-    (0x00B7, 0x00), (0x00BB, 0x3C), (0x00B2, 0x09), (0x00CA, 0x09),
-    (0x0198, 0x01), (0x01B0, 0x17), (0x01AD, 0x00), (0x00FF, 0x05),
-    (0x0100, 0x05), (0x0199, 0x05), (0x01A6, 0x1B), (0x01AC, 0x3E),
-    (0x01A7, 0x1F), (0x0030, 0x00),
-]
-
-# ==========================================
-# 4. VL6180X TREIBER-KLASSE
-# ==========================================
-class VL6180X:
-    def __init__(self, bus, address):
-        self.bus = bus
-        self.address = address
-
-    # --- Roh-I2C mit 16-Bit-Index ---
-    def write8(self, reg, data):
-        msg = i2c_msg.write(self.address, [(reg >> 8) & 0xFF, reg & 0xFF, data & 0xFF])
-        self.bus.i2c_rdwr(msg)
-
-    def read8(self, reg):
-        w = i2c_msg.write(self.address, [(reg >> 8) & 0xFF, reg & 0xFF])
-        r = i2c_msg.read(self.address, 1)
-        self.bus.i2c_rdwr(w, r)
-        return list(r)[0]
-
-    # Sensor-Identitaet pruefen (Model-ID muss 0xB4 sein)
-    def check_present(self):
-        try:
-            val = self.read8(IDENTIFICATION__MODEL_ID)
-            print(f"  Model-ID @ 0x{self.address:02X}: 0x{val:02X} (erwartet 0xB4)")
-            return val == 0xB4
-        except OSError as e:
-            print(f"  I2C-Fehler @ 0x{self.address:02X}: {e}")
-            return False
-
-    # I2C-Adresse umschreiben (7-Bit). Danach self.address aktualisieren.
-    def set_address(self, new_address):
-        self.write8(I2C_SLAVE__DEVICE_ADDRESS, new_address & 0x7F)
-        self.address = new_address
-
-    # Pflicht-Init + Grundkonfiguration laden
-    def init(self):
-        # Nur laden, wenn der Sensor frisch aus dem Reset kommt
-        if self.read8(SYSTEM__FRESH_OUT_OF_RESET) == 1:
-            for reg, val in SR03_INIT:
-                self.write8(reg, val)
-            self.write8(SYSTEM__FRESH_OUT_OF_RESET, 0x00)
-
-        # Readout-Averaging (Rauschunterdrueckung, Default 48)
-        self.write8(READOUT__AVERAGING_SAMPLE_PERIOD, 0x30)
-        # Max-Konvergenzzeit
-        self.write8(SYSRANGE__MAX_CONVERGENCE_TIME, MAX_CONVERGENCE_TIME & 0x3F)
-
-    # Hardware-Schwellwert + GPIO1-Interrupt konfigurieren und Continuous starten.
-    # range_int_mode = 1 (Level Low): Interrupt feuert, wenn Distanz < THRESH_LOW.
-    def start_threshold_mode(self):
-        # Schwellwerte (THRESH_HIGH auf Maximum, da nur die untere Grenze zaehlt)
-        self.write8(SYSRANGE__THRESH_LOW, THRESHOLD_MM & 0xFF)
-        self.write8(SYSRANGE__THRESH_HIGH, 0xFF)
-
-        # Mess-Intervall im Continuous-Mode (0 = 10ms, Schritt 10ms)
-        self.write8(SYSRANGE__INTERMEASUREMENT_PERIOD, (INTERMEASUREMENT_MS // 10) - 1)
-
-        # Interrupt-Quelle: Range "Level Low" (Bits [2:0] = 1)
-        self.write8(SYSTEM__INTERRUPT_CONFIG_GPIO, 0x01)
-
-        # GPIO1 als Interrupt-Ausgang: select = 1000 (Bits [4:1]) -> 0x10
-        gpio1_cfg = 0x10
-        if GPIO1_ACTIVE_HIGH:
-            gpio1_cfg |= 0x20    # Polaritaets-Bit [5]
-        self.write8(SYSTEM__MODE_GPIO1, gpio1_cfg)
-
-        # Alle Interrupts loeschen und Continuous-Ranging starten
-        self.clear_interrupt()
-        self.write8(SYSRANGE__START, 0x03)   # mode=continuous, start
-
-    # Letzten Distanzwert lesen (mm). Nur fuer Logging - die Schwellwert-
-    # Entscheidung trifft der Sensor selbst in Hardware.
-    def read_range(self):
-        return self.read8(RESULT__RANGE_VAL)
-
-    # Interrupt-Status lesen. Range-Bits [2:0]: 1 = Level-Low-Event (Objekt nah).
-    def range_event(self):
-        return (self.read8(RESULT__INTERRUPT_STATUS_GPIO) & 0x07) == 1
-
-    # Interrupt-Latch loeschen, damit der naechste Messzyklus neu auswertet.
-    def clear_interrupt(self):
-        self.write8(SYSTEM__INTERRUPT_CLEAR, 0x07)
-
-
-# ==========================================
-# 5. INITIALISIERUNG & SENSOR-BRINGUP
-# ==========================================
-def setup_sensors(bus):
+def setup_sensors():
     """Beide Sensoren sequenziell hochfahren und umadressieren."""
-    xshut_left = DigitalOutputDevice(XSHUT_LEFT)
-    xshut_right = DigitalOutputDevice(XSHUT_RIGHT)
-
-    # Beide Sensoren in den Reset zwingen
-    xshut_left.off()
-    xshut_right.off()
+    xshut_left  = DigitalOutputDevice(XSHUT_LEFT,  initial_value=False)
+    xshut_right = DigitalOutputDevice(XSHUT_RIGHT, initial_value=False)
     time.sleep(0.05)
     print("Beide XSHUT LOW (Reset)")
 
-    # --- Linken Sensor hochfahren und umadressieren ---
+    # --- Linken Sensor hochfahren ---
     xshut_left.on()
     time.sleep(0.1)
-    print(f"XSHUT Links ({XSHUT_LEFT}) HIGH -> pruefe 0x{ADDR_DEFAULT:02X}...")
-    left = VL6180X(bus, ADDR_DEFAULT)
-    if not left.check_present():
-        print("Fehler: Linker Sensor antwortet nicht auf 0x29.")
-        sys.exit()
-    left.set_address(ADDR_LEFT)
-    left.init()
-    print(f"Linker Sensor umadressiert auf 0x{ADDR_LEFT:02X}")
+    print(f"XSHUT Links  (GPIO{XSHUT_LEFT})  HIGH -> init @ 0x{ADDR_DEFAULT:02X} ...")
+    left = VL53L0X.VL53L0X(i2c_bus=I2C_BUS, i2c_address=ADDR_DEFAULT)
+    left.open()
+    left.change_address(ADDR_LEFT)
+    print(f"  -> umadressiert auf 0x{ADDR_LEFT:02X}")
 
-    # --- Rechten Sensor hochfahren (jetzt eindeutig, da links umadressiert) ---
+    # --- Rechten Sensor hochfahren (links ist jetzt auf 0x2A, kein Konflikt) ---
     xshut_right.on()
     time.sleep(0.1)
-    print(f"XSHUT Rechts ({XSHUT_RIGHT}) HIGH -> pruefe 0x{ADDR_DEFAULT:02X}...")
-    right = VL6180X(bus, ADDR_DEFAULT)
-    if not right.check_present():
-        print("Fehler: Rechter Sensor antwortet nicht auf 0x29.")
-        sys.exit()
-    right.set_address(ADDR_RIGHT)
-    right.init()
-    print(f"Rechter Sensor umadressiert auf 0x{ADDR_RIGHT:02X}")
+    print(f"XSHUT Rechts (GPIO{XSHUT_RIGHT}) HIGH -> init @ 0x{ADDR_DEFAULT:02X} ...")
+    right = VL53L0X.VL53L0X(i2c_bus=I2C_BUS, i2c_address=ADDR_DEFAULT)
+    right.open()
+    right.change_address(ADDR_RIGHT)
+    print(f"  -> umadressiert auf 0x{ADDR_RIGHT:02X}")
 
-    # XSHUT-Objekte zurueckgeben, damit sie nicht vom Garbage Collector
-    # eingesammelt werden (sonst fallen die Pins auf LOW = Reset).
+    # Continuous Ranging auf beiden Sensoren starten
+    left.start_ranging(VL53L0X.Vl53l0xAccuracyMode.GOOD)
+    right.start_ranging(VL53L0X.Vl53l0xAccuracyMode.GOOD)
+
+    # XSHUT-Objekte als Tupel zurueckgeben, damit sie nicht vom GC eingesammelt
+    # werden (Destruktor wuerde den Pin LOW ziehen = Sensor-Reset).
     return left, right, (xshut_left, xshut_right)
 
 
 # ==========================================
-# 6. MAIN
+# 4. MAIN
 # ==========================================
 def main():
-    # Timing-Regel aus dem Datenblatt hart pruefen (sonst undefiniertes Verhalten)
-    assert MAX_CONVERGENCE_TIME + 5 <= INTERMEASUREMENT_MS * 0.9, (
-        "Ungueltige Timing-Konfiguration: "
-        "MAX_CONVERGENCE_TIME + 5 muss <= INTERMEASUREMENT_MS * 0.9 sein."
-    )
+    left, right, _xshut = setup_sensors()
 
-    bus = SMBus(I2C_BUS)
-    left, right, _xshut = setup_sensors(bus)
+    print()
+    print("=" * 44)
+    print(f"  VL53L0X Schwellwert-Modus aktiv")
+    print(f"  Schwelle: < {THRESHOLD_MM} mm  |  Intervall: {int(POLL_INTERVAL * 1000)} ms")
+    print("=" * 44)
 
-    # GPIO1-Leitungen der Sensoren als Pi-Eingaenge (Open-Drain -> Pull-up).
-    irq_left = DigitalInputDevice(IRQ_LEFT, pull_up=True)
-    irq_right = DigitalInputDevice(IRQ_RIGHT, pull_up=True)
-
-    # Hardware-Schwellwertmodus auf beiden Sensoren starten
-    left.start_threshold_mode()
-    right.start_threshold_mode()
-
-    print("=======================================")
-    print(f" VL6180X Schwellwert-Modus aktiv (< {THRESHOLD_MM} mm)")
-    print(f" Mess-Intervall: {INTERMEASUREMENT_MS} ms")
-    print("=======================================")
-
-    # Letzten Zustand merken, um nur bei Aenderungen zu loggen
     state = {"L": None, "R": None}
 
     try:
         while True:
-            for name, sensor in (("L", left), ("R", right)):
-                near = sensor.range_event()           # Sensor-Hardware-Vergleich
-                if near != state[name]:
-                    dist = sensor.read_range()
-                    if near:
-                        print(f"[{name}] Objekt NAH  ({dist} mm < {THRESHOLD_MM} mm)")
-                    else:
-                        print(f"[{name}] Objekt frei ({dist} mm)")
-                    state[name] = near
-                # Latch loeschen, damit der naechste Messzyklus neu auswertet
-                sensor.clear_interrupt()
+            for label, sensor in (("L", left), ("R", right)):
+                dist = sensor.get_distance()
+                if dist <= 0 or dist >= MAX_VALID_MM:
+                    continue                          # ungueltige Messung ueberspringen
 
-            time.sleep(INTERMEASUREMENT_MS / 1000.0)
+                near = dist < THRESHOLD_MM
+                if near != state[label]:
+                    if near:
+                        print(f"[{label}] Objekt NAH   {dist:4d} mm  (< {THRESHOLD_MM} mm)")
+                    else:
+                        print(f"[{label}] Objekt frei  {dist:4d} mm")
+                    state[label] = near
+
+            time.sleep(POLL_INTERVAL)
 
     except KeyboardInterrupt:
         print("\nSystem herunterfahren...")
-        # Continuous-Ranging stoppen
-        left.write8(SYSRANGE__START, 0x00)
-        right.write8(SYSRANGE__START, 0x00)
-        bus.close()
+        left.stop_ranging()
+        right.stop_ranging()
+        left.close()
+        right.close()
 
 
 if __name__ == "__main__":
