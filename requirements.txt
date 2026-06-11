@@ -2,7 +2,8 @@ opencv-python
 numpy
 pyserial
 gpiozero
-VL53L0X
+adafruit-blinka
+adafruit-circuitpython-vl53l0x
 smbus2
 ai-edge-litert
 
