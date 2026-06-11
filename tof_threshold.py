@@ -28,8 +28,7 @@ ADDR_LEFT    = 0x2A
 ADDR_RIGHT   = 0x2B
 
 THRESHOLD_MM   = 200
-TIMING_BUDGET  = 33000  # us — Messzeit pro Sample (min ~20ms, default 33ms)
-POLL_INTERVAL  = 0.05   # s  — Abfrageintervall (< TIMING_BUDGET macht keinen Sinn)
+POLL_INTERVAL = 0.05   # s
 VERBOSE        = True   # Messwerte ausgeben
 
 # ==========================================
@@ -85,8 +84,6 @@ def setup_sensors(i2c):
 def main():
     i2c = busio.I2C(board.SCL, board.SDA)
     left, right, _xshut = setup_sensors(i2c)
-    left.measurement_timing_budget  = TIMING_BUDGET
-    right.measurement_timing_budget = TIMING_BUDGET
 
     print()
     print("=" * 44)
