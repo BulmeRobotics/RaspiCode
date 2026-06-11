@@ -33,9 +33,14 @@ VERBOSE      = False   # Im Thread-Modus standardmaessig stumm
 
 # ==========================================
 # 3. OEFFENTLICHER ZUSTAND
-# Zugriff von aussen: tof_threshold.state["L"] / tof_threshold.state["R"]
 # ==========================================
-state = {"L": 0, "R": 0}
+state = {"L": 0, "R": 0}   # 1 = Objekt nah, 0 = frei
+raw   = {"L": 0, "R": 0}   # Letzte Messung in mm
+
+def set_threshold(mm):
+    """Schwellwert zur Laufzeit aendern. Gilt nur fuer den aktuellen Prozess."""
+    global THRESHOLD_MM
+    THRESHOLD_MM = mm
 
 # VL53L0X-Register
 _REG_INT_STATUS = 0x13
@@ -136,6 +141,7 @@ def _loop(i2c, left, right, xshut):
         for label, addr in (("L", ADDR_LEFT), ("R", ADDR_RIGHT)):
             dist = _read_nb(i2c, addr)
             if dist is not None:
+                raw[label]   = dist
                 state[label] = 1 if dist < THRESHOLD_MM else 0
                 updated = True
         if VERBOSE and updated:
