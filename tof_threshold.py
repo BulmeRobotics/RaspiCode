@@ -28,9 +28,8 @@ XSHUT_RIGHT   = 25
 ADDR_LEFT     = 0x2A
 ADDR_RIGHT    = 0x2B
 
-THRESHOLD_MM  = 200
-POLL_INTERVAL = 0.03   # s
-VERBOSE       = False  # Im Thread-Modus standardmaessig stumm
+THRESHOLD_MM = 200
+VERBOSE      = False   # Im Thread-Modus standardmaessig stumm
 
 # ==========================================
 # 3. OEFFENTLICHER ZUSTAND
@@ -132,13 +131,17 @@ _thread = None
 
 def _loop(i2c, left, right, xshut):
     while True:
+        # Beide Sensoren nicht-blockierend lesen
+        updated = False
         for label, addr in (("L", ADDR_LEFT), ("R", ADDR_RIGHT)):
             dist = _read_nb(i2c, addr)
             if dist is not None:
                 state[label] = 1 if dist < THRESHOLD_MM else 0
-        if VERBOSE:
+                updated = True
+        if VERBOSE and updated:
             print(f"L {state['L']}  R {state['R']}")
-        time.sleep(POLL_INTERVAL)
+        # Kurz warten wenn noch kein neues Sample da, sonst sofort weiter
+        time.sleep(0.005 if not updated else 0)
 
 def start():
     """Sensoren initialisieren und Poll-Loop als Daemon-Thread starten."""

@@ -11,4 +11,4 @@ while True:
     l = tof_threshold.state["L"]
     r = tof_threshold.state["R"]
     print(f"Links: {l}  Rechts: {r}")
-    time.sleep(0.1)
+    time.sleep(0.03)
