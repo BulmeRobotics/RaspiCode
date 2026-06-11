@@ -141,19 +141,13 @@ def main():
     print(f"  VL53L0X GPIO-Modus | Schwelle: < {THRESHOLD_MM} mm")
     print("=" * 44)
 
-    state = {"L": None, "R": None}
-
     try:
         while True:
-            for label, irq, addr in (("L", irq_left, ADDR_LEFT),
-                                     ("R", irq_right, ADDR_RIGHT)):
-                near = not irq.value   # GPIO1 active-low: LOW = Objekt nah
-                if near != state[label]:
-                    print(f"[{label}] {'NAH ' if near else 'frei'}")
-                    state[label] = near
-                # Latch loeschen damit naechste Messung neu auswertet
-                _clear_interrupt(i2c, addr)
-
+            l_state = "LOW" if not irq_left.value  else "HIGH"
+            r_state = "LOW" if not irq_right.value else "HIGH"
+            print(f"L {l_state}  R {r_state}")
+            _clear_interrupt(i2c, ADDR_LEFT)
+            _clear_interrupt(i2c, ADDR_RIGHT)
             time.sleep(POLL_INTERVAL)
 
     except KeyboardInterrupt:
