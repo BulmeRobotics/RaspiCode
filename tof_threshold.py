@@ -161,7 +161,7 @@ def start():
 if __name__ == "__main__":
     VERBOSE = True
     start()
-    print(f"Schwelle: < {THRESHOLD_MM} mm | Intervall: {int(POLL_INTERVAL * 1000)} ms")
+    print(f"Schwelle: < {THRESHOLD_MM} mm")
     print("Ctrl+C zum Beenden.\n")
     try:
         while True:
