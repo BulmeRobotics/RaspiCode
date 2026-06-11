@@ -178,7 +178,7 @@ def setup_sensors(bus):
 
     # --- Linken Sensor hochfahren und umadressieren ---
     xshut_left.on()
-    time.sleep(0.01)             # Boot-Zeit (min. 1ms laut Datenblatt)
+    time.sleep(0.1)              # Boot-Zeit
     left = VL6180X(bus, ADDR_DEFAULT)
     if not left.check_present():
         print("Fehler: Linker Sensor antwortet nicht auf 0x29.")
@@ -188,7 +188,7 @@ def setup_sensors(bus):
 
     # --- Rechten Sensor hochfahren (jetzt eindeutig, da links umadressiert) ---
     xshut_right.on()
-    time.sleep(0.01)
+    time.sleep(0.1)
     right = VL6180X(bus, ADDR_DEFAULT)
     if not right.check_present():
         print("Fehler: Rechter Sensor antwortet nicht auf 0x29.")
