@@ -1,14 +1,14 @@
 import time
-import tof_threshold
+import tof
 
 # Sensoren initialisieren und Thread starten
-tof_threshold.start()
+tof.start()
 
 # Ab hier laeuft der Sensor-Thread im Hintergrund.
-# tof_threshold.state["L"] und ["R"] werden automatisch aktualisiert.
+# tof.state["L"] und ["R"] werden automatisch aktualisiert.
 
 while True:
-    l = tof_threshold.state["L"]
-    r = tof_threshold.state["R"]
+    l = tof.state["L"]
+    r = tof.state["R"]
     print(f"Links: {l}  Rechts: {r}")
     time.sleep(0.03)
