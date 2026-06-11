@@ -29,7 +29,6 @@ ADDR_RIGHT   = 0x2B
 
 THRESHOLD_MM  = 200
 POLL_INTERVAL = 0.05   # s
-MAX_VALID_MM  = 1200   # oberhalb = ausser Reichweite / Messfehler
 VERBOSE       = True   # Messwerte ausgeben
 
 # ==========================================
@@ -98,8 +97,7 @@ def main():
                 try:
                     dist = sensor.range
                 except Exception as e:
-                    if VERBOSE:
-                        print(f"[{label}] Lesefehler: {e}")
+                    print(f"[{label}] Lesefehler: {e}")
                     results[label] = 0
                     continue
                 results[label] = 1 if dist < THRESHOLD_MM else 0
