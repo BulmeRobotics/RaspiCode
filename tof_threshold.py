@@ -99,12 +99,7 @@ def main():
                     print(f"[{label}] Lesefehler: {e}")
                     continue
 
-                if dist <= 0 or dist >= MAX_VALID_MM:
-                    print(f"{label} OOR")
-                elif dist < THRESHOLD_MM:
-                    print(f"{label} LOW")
-                else:
-                    print(f"{label} HIGH")
+                print(f"{label} {'1' if dist < THRESHOLD_MM else '0'}")
 
             time.sleep(POLL_INTERVAL)
 
