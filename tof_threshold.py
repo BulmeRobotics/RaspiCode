@@ -28,7 +28,7 @@ ADDR_DEFAULT = 0x29
 ADDR_LEFT    = 0x2A
 ADDR_RIGHT   = 0x2B
 
-THRESHOLD_MM  = 60
+THRESHOLD_MM  = 200
 POLL_INTERVAL = 0.05   # s
 MAX_VALID_MM  = 1200   # oberhalb = ausser Reichweite / Messfehler
 
