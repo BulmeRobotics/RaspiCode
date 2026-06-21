@@ -197,15 +197,30 @@ class CameraAIThread(threading.Thread):
         self.last_detection_time = 0.0
         self.TIMEOUT_DURATION = 3.0  # 3 Sekunden Timeout-Grenze
         
-        # TFLite Modell laden
+        # ==========================================
+        # TFLite Modell laden (MIT CORAL DELEGATE)
+        # ==========================================
         try:
-            self.interpreter = tflite.Interpreter(model_path=MODEL_PATH)
+            # Wir laden den Treiber explizit über den absoluten Pfad des Pi 5
+            coral_delegate = tflite.load_delegate('/usr/lib/aarch64-linux-gnu/libedgetpu.so.1')
+            
+            # Hier übergeben wir den Delegate an den Interpreter
+            self.interpreter = tflite.Interpreter(
+                model_path=MODEL_PATH,
+                experimental_delegates=[coral_delegate]
+            )
+            
             self.interpreter.allocate_tensors()
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
             self.ki_h, self.ki_w = self.input_details[0]['shape'][1:3]
             self.is_int8 = (self.input_details[0]['dtype'] in [np.int8, np.uint8])
             self.ready = True
+            print(f"Cam {self.side_code} Edge TPU Modell erfolgreich geladen.")
+            
+        except ValueError as ve:
+            print(f"Cam {self.side_code} Delegate-Fehler (Coral Stick fehlt oder Rechte fehlen?): {ve}")
+            self.ready = False
         except Exception as e:
             print(f"Cam {self.side_code} TFLite-Fehler: {e}")
             self.ready = False
