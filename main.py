@@ -34,9 +34,9 @@ except ImportError:
 # ==========================================
 # 2. KONFIGURATION
 # ==========================================
-MODEL_PATH = "trained.tflite"
+MODEL_PATH = "trainedEdgeClean_edgetpu.tflite" # Hier ggf. auf dein edgetpu.tflite anpassen!
 LABEL_PATH = "labels.txt"
-MIN_CONFIDENCE = 0.4
+MIN_CONFIDENCE = 0.6
 SERIAL_PORT = '/dev/ttyAMA0'  # Ggf. anpassen auf /dev/ttyUSB0
 BAUD_RATE = 115200
 TRIGGER_PIN = 17              # Gemeinsamer Pin für beide Kameras
@@ -100,7 +100,7 @@ def find_target_corners(image_bgr):
         if area > 1000:
             rect = cv2.minAreaRect(cnt)
             box = cv2.boxPoints(rect)
-            box = np.int32(box) # Verwende stabiles int32 für aktuelle NumPy-Versionen
+            box = np.int32(box) 
             
             width = rect[1][0]
             height = rect[1][1]
@@ -242,39 +242,79 @@ class CameraAIThread(threading.Thread):
             
             detected_frame_label = None
 
-            # --- ERKENNUNG 1: TFLite Buchstaben ---
+            # --- ERKENNUNG 1: TFLite Buchstaben (Zweistufige Pipeline) ---
             
-            # 1. Bild für das KI-Modell in Graustufen umwandeln (1 Farbkanal)
+            # 1. Bild in Graustufen umwandeln
             gray_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+            total_area = gray_frame.shape[0] * gray_frame.shape[1]
             
-            # 2. Skalieren auf die erwartete KI-Eingangsgröße
-            prep_img = cv2.resize(gray_frame, (self.ki_w, self.ki_h))
+            # 2. Adaptive Binarisierung (Der robuste Schutz gegen Schatten)
+            blurred = cv2.GaussianBlur(gray_frame, (7, 7), 0)
+            thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                           cv2.THRESH_BINARY_INV, 21, 5)
             
-            # 3. Dimensionen anpassen: Von (H, W) zu (H, W, 1) und dann zu (Batch=1, H, W, 1)
-            prep_img = np.expand_dims(prep_img, axis=-1)  # Fügt den fehlenden Farbkanal (1) hinzu
-            input_data = np.expand_dims(prep_img, axis=0) # Fügt die Batch-Dimension (1) hinzu
-            
-            # 4. Typisierung für int8 / float32
-            if self.is_int8:
-                input_data = (input_data.astype(np.float32) - 128).astype(np.int8)
-            else:
-                input_data = (input_data / 255.0).astype(np.float32)
+            # 3. Konturen suchen & filtern
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            valid_contours = [c for c in contours if 10 < cv2.contourArea(c) < total_area * 0.99]
 
+            if valid_contours:
+                # Den größten Bereich als Buchstaben identifizieren
+                largest_contour = max(valid_contours, key=cv2.contourArea)
+                x_b, y_b, w_b, h_b = cv2.boundingRect(largest_contour)
+                
+                letter_crop = gray_frame[y_b:y_b+h_b, x_b:x_b+w_b]
+                
+                # Mathematisches Padding für exakt 70% Füllrate
+                FILL_RATIO = 0.7
+                max_dim = max(w_b, h_b)
+                target_dim = int(max_dim / FILL_RATIO)
+                
+                pad_top = (target_dim - h_b) // 2
+                pad_bottom = target_dim - h_b - pad_top
+                pad_left = (target_dim - w_b) // 2
+                pad_right = target_dim - w_b - pad_left
+                
+                bg_color = int(np.median(gray_frame[0:10, 0:10]))
+                
+                padded_img = cv2.copyMakeBorder(letter_crop, pad_top, pad_bottom, pad_left, pad_right, 
+                                                cv2.BORDER_CONSTANT, value=bg_color)
+                prep_img = cv2.resize(padded_img, (self.ki_w, self.ki_h), interpolation=cv2.INTER_AREA)
+            else:
+                # Fallback, falls absolut keine Kontur gefunden wird
+                prep_img = cv2.resize(gray_frame, (self.ki_w, self.ki_h))
+
+            # Dimensionen anpassen für TFLite
+            prep_img_expanded = np.expand_dims(prep_img, axis=-1)
+            input_data = np.expand_dims(prep_img_expanded, axis=0)
+
+            # Typisierung & Quantisierung
+            if self.is_int8:
+                scale, zero_point = self.input_details[0]['quantization']
+                input_data = (input_data.astype(np.float32) / scale + zero_point).astype(np.int8)
+            else:
+                input_data = input_data.astype(np.float32)
+
+            # Infernz ausführen
             self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
             self.interpreter.invoke()
             output_data = self.interpreter.get_tensor(self.output_details[0]['index'])[0]
-            grid_h, grid_w, num_classes = output_data.shape
 
-            max_score = 0
-            for y in range(grid_h):
-                for x in range(grid_w):
-                    for class_id in range(1, num_classes):
-                        raw_score = output_data[y][x][class_id]
-                        score = (float(raw_score) + 128.0) / 255.0 if self.is_int8 else float(raw_score)
-                        
-                        if score > MIN_CONFIDENCE and score > max_score:
-                            max_score = score
-                            detected_frame_label = LABELS.get(class_id, "??")
+            # Ergebnisse des Klassifikators auslesen
+            if self.is_int8:
+                out_scale, out_zero_point = self.output_details[0]['quantization']
+                scores = (output_data.astype(np.float32) - out_zero_point) * out_scale
+            else:
+                scores = output_data
+
+            best_class_id = np.argmax(scores)
+            confidence = scores[best_class_id]
+
+            if confidence > MIN_CONFIDENCE:
+                label_str = LABELS.get(best_class_id)
+                # Ignoriere Background, damit die Pipeline zu den Farbkreisen weitergehen kann
+                if label_str and label_str.lower() != "background":
+                    detected_frame_label = label_str
+
 
             # --- ERKENNUNG 2: Farbringe (falls kein Buchstabe Vorrang hatte) ---
             if not detected_frame_label:
