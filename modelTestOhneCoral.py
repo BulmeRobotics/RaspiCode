@@ -29,7 +29,6 @@ except ImportError:
 # ==========================================
 # 2. KONFIGURATION
 # ==========================================
-# WICHTIG: Nutze hier dein normales Modell OHNE "_edgetpu" im Namen!
 MODEL_PATH = "trainedEdgeClean.tflite" 
 LABEL_PATH = "labels.txt"
 MIN_CONFIDENCE = 0.6
@@ -56,6 +55,9 @@ def order_points(pts):
     return rect
 
 def find_target_corners(image_bgr):
+    cutoff_top_y = int(image_bgr.shape[0] * 0.25)
+    cutoff_bottom_y = int(image_bgr.shape[0] * 0.875)
+    
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blurred, 50, 150)
@@ -65,6 +67,11 @@ def find_target_corners(image_bgr):
 
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
     for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        
+        if y < cutoff_top_y or (y + h) > cutoff_bottom_y: 
+            continue
+            
         area = cv2.contourArea(cnt)
         if area > 1000:
             rect = cv2.minAreaRect(cnt)
@@ -151,7 +158,7 @@ except Exception as e:
 # ==========================================
 print("Starte Picamera2...")
 try:
-    picam2 = Picamera2(0) # Kamera 0
+    picam2 = Picamera2(0) 
     config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (640, 480)})
     picam2.configure(config)
     picam2.start()
@@ -165,20 +172,26 @@ print("\nKamera läuft! Beenden mit Taste 'q' im Videofenster.")
 # 6. HAUPTSCHLEIFE (LIVE-STREAM)
 # ==========================================
 while True:
-    # 1. Frame holen
     frame_rgb = picam2.capture_array()
-    
-    # --- NEU: HARDWARE-AUSRICHTUNG KORRIGIEREN ---
-    # Das Bild wird physisch um 180 Grad gedreht, um die Kameramontage auszugleichen.
-    # Dies muss vor allen anderen Konvertierungen passieren!
     frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
     
     frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
     display_frame = frame_bgr.copy()
     
+    cutoff_top_y = int(frame_rgb.shape[0] * 0.25)
+    cutoff_bottom_y = int(frame_rgb.shape[0] * 0.875)
+    
+    cv2.line(display_frame, (0, cutoff_top_y), (display_frame.shape[1], cutoff_top_y), (0, 255, 255), 2)
+    cv2.putText(display_frame, "SPERRZONE OBEN (Ignoriert)", (10, cutoff_top_y - 10), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+    
+    cv2.line(display_frame, (0, cutoff_bottom_y), (display_frame.shape[1], cutoff_bottom_y), (0, 255, 255), 2)
+    cv2.putText(display_frame, "SPERRZONE UNTEN (Ignoriert)", (10, cutoff_bottom_y + 20), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+    
     detected_label = "Nichts gefunden"
     confidence = 0.0
-    color = (0, 0, 255) # Rot als Standard
+    color = (0, 0, 255) 
     box_coords = None
 
     # --- PIPELINE 1: BUCHSTABEN-ERKENNUNG (Zweistufig) ---
@@ -194,8 +207,26 @@ while True:
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     valid_contours = [c for c in contours if 10 < cv2.contourArea(c) < total_area * 0.99]
 
-    if valid_contours:
-        largest_contour = max(valid_contours, key=cv2.contourArea)
+    square_contours = []
+    for c in valid_contours:
+        x_tmp, y_tmp, w_tmp, h_tmp = cv2.boundingRect(c)
+        if h_tmp == 0: continue 
+        
+        if y_tmp < cutoff_top_y or (y_tmp + h_tmp) > cutoff_bottom_y:
+            continue
+            
+        if w_tmp < 60 or h_tmp < 60:
+            continue
+        if w_tmp > 360 or h_tmp > 360:
+            continue
+            
+        aspect_ratio = w_tmp / float(h_tmp)
+        if 0.5 <= aspect_ratio <= 2.0:
+            square_contours.append(c)
+
+    # --- KI-INFERENZ (NUR WENN EIN GÜLTIGER CROP GEFUNDEN WURDE) ---
+    if square_contours:
+        largest_contour = max(square_contours, key=cv2.contourArea)
         x_b, y_b, w_b, h_b = cv2.boundingRect(largest_contour)
         box_coords = (x_b, y_b, w_b, h_b)
         
@@ -214,45 +245,44 @@ while True:
         padded_img = cv2.copyMakeBorder(letter_crop, pad_top, pad_bottom, pad_left, pad_right, 
                                         cv2.BORDER_CONSTANT, value=bg_color)
         prep_img = cv2.resize(padded_img, (ki_w, ki_h), interpolation=cv2.INTER_AREA)
-    else:
-        prep_img = cv2.resize(gray_frame, (ki_w, ki_h))
 
-    cv2.imshow("Das sieht die KI (96x96)", cv2.resize(prep_img, (200, 200), interpolation=cv2.INTER_NEAREST))
+        cv2.imshow("Das sieht die KI (96x96)", cv2.resize(prep_img, (200, 200), interpolation=cv2.INTER_NEAREST))
 
-    # TFLite Inferenz (Auf der CPU)
-    prep_img_expanded = np.expand_dims(prep_img, axis=-1)
-    input_data = np.expand_dims(prep_img_expanded, axis=0)
+        prep_img_expanded = np.expand_dims(prep_img, axis=-1)
+        input_data = np.expand_dims(prep_img_expanded, axis=0)
 
-    if is_int8:
-        scale, zero_point = input_details[0]['quantization']
-        input_data = (input_data.astype(np.float32) / scale + zero_point).astype(np.int8)
-    else:
-        input_data = input_data.astype(np.float32)
+        if is_int8:
+            scale, zero_point = input_details[0]['quantization']
+            input_data = (input_data.astype(np.float32) / scale + zero_point).astype(np.int8)
+        else:
+            input_data = input_data.astype(np.float32)
 
-    interpreter.set_tensor(input_details[0]['index'], input_data)
-    interpreter.invoke()
-    output_data = interpreter.get_tensor(output_details[0]['index'])[0]
+        interpreter.set_tensor(input_details[0]['index'], input_data)
+        interpreter.invoke()
+        output_data = interpreter.get_tensor(output_details[0]['index'])[0]
 
-    if is_int8:
-        out_scale, out_zero_point = output_details[0]['quantization']
-        scores = (output_data.astype(np.float32) - out_zero_point) * out_scale
-    else:
-        scores = output_data
+        if is_int8:
+            out_scale, out_zero_point = output_details[0]['quantization']
+            scores = (output_data.astype(np.float32) - out_zero_point) * out_scale
+        else:
+            scores = output_data
 
-    best_class_id = np.argmax(scores)
-    confidence = scores[best_class_id]
+        best_class_id = np.argmax(scores)
+        confidence = scores[best_class_id]
 
-    if confidence > MIN_CONFIDENCE:
-        label_str = LABELS.get(best_class_id)
-        if label_str and label_str.lower() != "background":
-            detected_label = f"Buchstabe: {label_str} ({confidence*100:.0f}%)"
-            color = (0, 255, 0) # Grün
-            
-            if box_coords:
-                bx, by, bw, bh = box_coords
-                cv2.rectangle(display_frame, (bx, by), (bx+bw, by+bh), color, 2)
+        if confidence > MIN_CONFIDENCE:
+            label_str = LABELS.get(best_class_id)
+            if label_str and label_str.lower() != "background":
+                detected_label = f"Buchstabe: {label_str} ({confidence*100:.0f}%)"
+                color = (0, 255, 0)
+                
+                if box_coords:
+                    bx, by, bw, bh = box_coords
+                    cv2.rectangle(display_frame, (bx, by), (bx+bw, by+bh), color, 2)
+
 
     # --- PIPELINE 2: FARBRINGE (Fallback) ---
+    # Diese läuft automatisch, wenn oben kein passender Buchstabe gefunden und ausgewertet wurde
     if detected_label == "Nichts gefunden":
         corners = find_target_corners(frame_bgr)
         if corners is not None:
@@ -269,7 +299,7 @@ while True:
                 cv2.imshow("Debug: Warped Ring", warped)
 
     # --- ERGEBNIS ANZEIGEN ---
-    cv2.putText(display_frame, detected_label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+    cv2.putText(display_frame, detected_label, (10, cutoff_top_y + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
     cv2.imshow("Live-Kamera Pi 5", display_frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
