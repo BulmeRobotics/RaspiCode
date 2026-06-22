@@ -233,6 +233,8 @@ class CameraAIThread(threading.Thread):
         self.enabled = False
         self.running = True
         self.waiting_for_reset = False
+        self._alert_lock = threading.Lock()
+        self._alert_active = False
         
         self.status_pin = DigitalOutputDevice(status_gpio_pin)
         self.status_pin.off()
@@ -259,9 +261,20 @@ class CameraAIThread(threading.Thread):
             print(f"Cam {self.side_code} Fehler: {e}")
             self.ready = False
 
+    @property
+    def alert_active(self):
+        with self._alert_lock:
+            return self._alert_active
+
+    @alert_active.setter
+    def alert_active(self, value):
+        with self._alert_lock:
+            self._alert_active = bool(value)
+
     def reset_logic(self):
         self.Counter_Harmed = self.Counter_Safe = self.Counter_Unharmed = 0
         self.frame_counter = 0
+        self.alert_active = False
 
     def run(self):
         if not self.ready: return
@@ -281,11 +294,13 @@ class CameraAIThread(threading.Thread):
         while self.running:
             if self.waiting_for_reset:
                 self.status_pin.on()
+                self.alert_active = False
                 time.sleep(0.1)
                 continue
 
             if not self.enabled:
                 self.status_pin.off()
+                self.alert_active = False
                 time.sleep(0.1)
                 continue
 
@@ -293,7 +308,6 @@ class CameraAIThread(threading.Thread):
                 self.status_pin.off()
                 if self.frame_counter > 0:
                     self.reset_logic()
-                    output_pin.off()
                     print(f"[{self.side_code}] Wand verloren. Reset.")
                 time.sleep(0.05)
                 continue
@@ -432,8 +446,7 @@ class CameraAIThread(threading.Thread):
             if detected_frame_label:
                 self.last_detection_time = current_time
                 self.frame_counter += 1
-                if self.frame_counter == 1:
-                    output_pin.on() 
+                self.alert_active = True
                 if detected_frame_label == "H": self.Counter_Harmed += 1
                 elif detected_frame_label == "S": self.Counter_Safe += 1
                 elif detected_frame_label == "U": self.Counter_Unharmed += 1
@@ -443,7 +456,6 @@ class CameraAIThread(threading.Thread):
                     if verstrichene_zeit > self.TIMEOUT_DURATION:
                         print(f"[{self.side_code}] Watchdog: Reset.")
                         self.reset_logic()
-                        output_pin.off()
 
             # --- ERGEBNIS ÜBERTRAGEN ---
             if self.frame_counter >= 20:
@@ -497,36 +509,25 @@ try:
                 cam_left.enabled = True
                 cam_right.enabled = True
                 serial_mgr.write("OK")
+                print("Enabled")
             
             elif cmd == "D":
                 cam_left.enabled = False
                 cam_left.waiting_for_reset = False
                 cam_left.reset_logic()
+                cam_left.alert_active = False
                 
                 cam_right.enabled = False
                 cam_right.waiting_for_reset = False
                 cam_right.reset_logic()
-                
-                output_pin.off()
+                cam_right.alert_active = False
                 serial_mgr.write("OK")
-            
-            elif cmd == "R":
-                output_pin.off() 
-                cam_left.waiting_for_reset = False
-                cam_right.waiting_for_reset = False
-                cam_left.enabled = False
-                cam_right.enabled = False
-                
-                print("Alerts Resetet. Kameras schlafen 2 Sekunden...")
-                time.sleep(2.0)
-                
-                cam_left.enabled = True
-                cam_left.reset_logic()
-                cam_right.enabled = True
-                cam_right.reset_logic()
-                
-                serial_mgr.write("OK")
-                print("Kameras wieder aktiviert.")
+                print("Disabled")
+
+        if cam_left.alert_active or cam_right.alert_active:
+            output_pin.on()
+        else:
+            output_pin.off()
                 
         time.sleep(0.01)
 
