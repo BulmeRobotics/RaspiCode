@@ -382,7 +382,11 @@ class CameraAIThread(threading.Thread):
                 output_pin.off()
                 print(f"[{self.side_code}] Transfer abgeschlossen. Pin LOW.")
                 self.reset_logic()
-                self.enabled = False 
+                
+                
+                ######## AUSKOMMENTIERUNG RÜCKGÄNGIG MACHEN!!!######
+                #self.enabled = False 
+                ####################################################
 
         picam2.stop()
 
@@ -415,16 +419,9 @@ try:
                         cam_left.enabled = True
                         cam_right.enabled = True
                         SerialWrite("OK")
-                    elif cmd == "RE":
-                        cam_right.enabled = True
-                        SerialWrite("OK")
                     elif cmd == "D":
                         cam_left.enabled = False
                         cam_left.reset_logic()
-                        cam_right.enabled = False
-                        cam_right.reset_logic()
-                        SerialWrite("OK")
-                    elif cmd == "RD":
                         cam_right.enabled = False
                         cam_right.reset_logic()
                         SerialWrite("OK")

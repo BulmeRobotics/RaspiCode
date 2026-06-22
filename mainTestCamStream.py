@@ -439,7 +439,7 @@ try:
                 end = buffer.find(">")
                 if start != -1 and end > start:
                     cmd = buffer[start+1:end]
-                    
+                    print("Arduino Command:", cmd)
                     if cmd == "I":
                         SerialWrite("OK")
                     elif cmd == "E":
