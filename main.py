@@ -13,12 +13,10 @@ from gpiozero import DigitalOutputDevice
 # 1. INITIALISIERUNG & IMPORT-BLOCK
 # ==========================================
 try:
-    # Versuche das neue LiteRT (Standard ab 2025/2026)
     import ai_edge_litert.interpreter as tflite
     print("LiteRT erfolgreich geladen.")
 except ImportError:
     try:
-        # Fallback auf das klassische TFLite
         import tensorflow.lite as tflite
         print("Klassisches TFLite geladen.")
     except ImportError:
@@ -34,7 +32,7 @@ except ImportError:
 # ==========================================
 # 2. KONFIGURATION
 # ==========================================
-MODEL_PATH = "trainedEdgeClean_edgetpu.tflite" # Hier ggf. auf dein edgetpu.tflite anpassen!
+MODEL_PATH = "trainedEdgeClean.tflite" # Reines CPU-Modell
 LABEL_PATH = "labels.txt"
 MIN_CONFIDENCE = 0.6
 SERIAL_PORT = '/dev/ttyAMA0'  # Ggf. anpassen auf /dev/ttyUSB0
@@ -85,7 +83,10 @@ def order_points(pts):
     return rect
 
 def find_target_corners(image_bgr):
-    """Sucht die Bounding Box des Ring-Targets basierend auf Kontrastkanten."""
+    # Sperrzonen für den Ring-Scan dynamisch berechnen
+    cutoff_top_y = int(image_bgr.shape[0] * 0.25)
+    cutoff_bottom_y = int(image_bgr.shape[0] * 0.875)
+    
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blurred, 50, 150)
@@ -96,6 +97,12 @@ def find_target_corners(image_bgr):
 
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
     for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        
+        # Ring in toter Zone ignorieren
+        if y < cutoff_top_y or (y + h) > cutoff_bottom_y: 
+            continue
+            
         area = cv2.contourArea(cnt)
         if area > 1000:
             rect = cv2.minAreaRect(cnt)
@@ -183,50 +190,38 @@ class CameraAIThread(threading.Thread):
     def __init__(self, cam_id, side_code):
         super().__init__()
         self.cam_id = cam_id
-        self.side_code = side_code # "L" oder "R"
+        self.side_code = side_code
         self.enabled = False
         self.running = True
         
-        # Gemeinsame Sicherheits-Zähler für Buchstaben- und Ring-Erkennungen
+        # Sicherheits-Zähler
         self.Counter_Harmed = 0
         self.Counter_Safe = 0
         self.Counter_Unharmed = 0
         self.frame_counter = 0
         
-        # Watchdog-Variablen
+        # Watchdog
         self.last_detection_time = 0.0
-        self.TIMEOUT_DURATION = 3.0  # 3 Sekunden Timeout-Grenze
+        self.TIMEOUT_DURATION = 3.0
         
         # ==========================================
-        # TFLite Modell laden (MIT CORAL DELEGATE)
+        # TFLite Modell laden (REINER CPU MODUS)
         # ==========================================
         try:
-            # Wir laden den Treiber explizit über den absoluten Pfad des Pi 5
-            coral_delegate = tflite.load_delegate('/usr/lib/aarch64-linux-gnu/libedgetpu.so.1')
-            
-            # Hier übergeben wir den Delegate an den Interpreter
-            self.interpreter = tflite.Interpreter(
-                model_path=MODEL_PATH,
-                experimental_delegates=[coral_delegate]
-            )
-            
+            self.interpreter = tflite.Interpreter(model_path=MODEL_PATH)
             self.interpreter.allocate_tensors()
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
             self.ki_h, self.ki_w = self.input_details[0]['shape'][1:3]
             self.is_int8 = (self.input_details[0]['dtype'] in [np.int8, np.uint8])
             self.ready = True
-            print(f"Cam {self.side_code} Edge TPU Modell erfolgreich geladen.")
+            print(f"Cam {self.side_code} CPU Modell erfolgreich geladen.")
             
-        except ValueError as ve:
-            print(f"Cam {self.side_code} Delegate-Fehler (Coral Stick fehlt oder Rechte fehlen?): {ve}")
-            self.ready = False
         except Exception as e:
             print(f"Cam {self.side_code} TFLite-Fehler: {e}")
             self.ready = False
 
     def reset_logic(self):
-        """Setzt die Sicherheits-Zähler zurück."""
         self.Counter_Harmed = self.Counter_Safe = self.Counter_Unharmed = 0
         self.frame_counter = 0
         output_pin.off()
@@ -250,36 +245,55 @@ class CameraAIThread(threading.Thread):
                 time.sleep(0.1)
                 continue
 
-            # Frame-Aufnahme (Liefert RGB888)
             frame_rgb = picam2.capture_array()
-            # Für die Geometrie und Farbauswertung der Ringe in OpenCV-BGR konvertieren
+            # 180 Grad Drehung für Hardwareausgleich
+            frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+            
+            # Sperrzonen berechnen
+            cutoff_top_y = int(frame_rgb.shape[0] * 0.25)
+            cutoff_bottom_y = int(frame_rgb.shape[0] * 0.875)
             
             detected_frame_label = None
 
-            # --- ERKENNUNG 1: TFLite Buchstaben (Zweistufige Pipeline) ---
-            
-            # 1. Bild in Graustufen umwandeln
+            # --- ERKENNUNG 1: TFLite Buchstaben (Gefiltert) ---
             gray_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
             total_area = gray_frame.shape[0] * gray_frame.shape[1]
             
-            # 2. Adaptive Binarisierung (Der robuste Schutz gegen Schatten)
             blurred = cv2.GaussianBlur(gray_frame, (7, 7), 0)
             thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                                            cv2.THRESH_BINARY_INV, 21, 5)
             
-            # 3. Konturen suchen & filtern
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             valid_contours = [c for c in contours if 10 < cv2.contourArea(c) < total_area * 0.99]
 
-            if valid_contours:
-                # Den größten Bereich als Buchstaben identifizieren
-                largest_contour = max(valid_contours, key=cv2.contourArea)
+            square_contours = []
+            for c in valid_contours:
+                x_tmp, y_tmp, w_tmp, h_tmp = cv2.boundingRect(c)
+                if h_tmp == 0: continue 
+                
+                # 1. Tote Zonen (Sperrzonen oben und unten)
+                if y_tmp < cutoff_top_y or (y_tmp + h_tmp) > cutoff_bottom_y:
+                    continue
+                    
+                # 2. Absolute Pixel-Grenzen (mindestens 60px, maximal 360px)
+                if w_tmp < 60 or h_tmp < 60:
+                    continue
+                if w_tmp > 360 or h_tmp > 360:
+                    continue
+                    
+                # 3. Aspekt-Ratio (Rechteckigkeit)
+                aspect_ratio = w_tmp / float(h_tmp)
+                if 0.5 <= aspect_ratio <= 2.0:
+                    square_contours.append(c)
+
+            # --- KI-INFERENZ (Wird NUR gestartet, wenn alles gepasst hat) ---
+            if square_contours:
+                largest_contour = max(square_contours, key=cv2.contourArea)
                 x_b, y_b, w_b, h_b = cv2.boundingRect(largest_contour)
                 
                 letter_crop = gray_frame[y_b:y_b+h_b, x_b:x_b+w_b]
                 
-                # Mathematisches Padding für exakt 70% Füllrate
                 FILL_RATIO = 0.7
                 max_dim = max(w_b, h_b)
                 target_dim = int(max_dim / FILL_RATIO)
@@ -294,42 +308,34 @@ class CameraAIThread(threading.Thread):
                 padded_img = cv2.copyMakeBorder(letter_crop, pad_top, pad_bottom, pad_left, pad_right, 
                                                 cv2.BORDER_CONSTANT, value=bg_color)
                 prep_img = cv2.resize(padded_img, (self.ki_w, self.ki_h), interpolation=cv2.INTER_AREA)
-            else:
-                # Fallback, falls absolut keine Kontur gefunden wird
-                prep_img = cv2.resize(gray_frame, (self.ki_w, self.ki_h))
 
-            # Dimensionen anpassen für TFLite
-            prep_img_expanded = np.expand_dims(prep_img, axis=-1)
-            input_data = np.expand_dims(prep_img_expanded, axis=0)
+                # Vorbereitung für den Interpreter
+                prep_img_expanded = np.expand_dims(prep_img, axis=-1)
+                input_data = np.expand_dims(prep_img_expanded, axis=0)
 
-            # Typisierung & Quantisierung
-            if self.is_int8:
-                scale, zero_point = self.input_details[0]['quantization']
-                input_data = (input_data.astype(np.float32) / scale + zero_point).astype(np.int8)
-            else:
-                input_data = input_data.astype(np.float32)
+                if self.is_int8:
+                    scale, zero_point = self.input_details[0]['quantization']
+                    input_data = (input_data.astype(np.float32) / scale + zero_point).astype(np.int8)
+                else:
+                    input_data = input_data.astype(np.float32)
 
-            # Infernz ausführen
-            self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
-            self.interpreter.invoke()
-            output_data = self.interpreter.get_tensor(self.output_details[0]['index'])[0]
+                self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
+                self.interpreter.invoke()
+                output_data = self.interpreter.get_tensor(self.output_details[0]['index'])[0]
 
-            # Ergebnisse des Klassifikators auslesen
-            if self.is_int8:
-                out_scale, out_zero_point = self.output_details[0]['quantization']
-                scores = (output_data.astype(np.float32) - out_zero_point) * out_scale
-            else:
-                scores = output_data
+                if self.is_int8:
+                    out_scale, out_zero_point = self.output_details[0]['quantization']
+                    scores = (output_data.astype(np.float32) - out_zero_point) * out_scale
+                else:
+                    scores = output_data
 
-            best_class_id = np.argmax(scores)
-            confidence = scores[best_class_id]
+                best_class_id = np.argmax(scores)
+                confidence = scores[best_class_id]
 
-            if confidence > MIN_CONFIDENCE:
-                label_str = LABELS.get(best_class_id)
-                # Ignoriere Background, damit die Pipeline zu den Farbkreisen weitergehen kann
-                if label_str and label_str.lower() != "background":
-                    detected_frame_label = label_str
-
+                if confidence > MIN_CONFIDENCE:
+                    label_str = LABELS.get(best_class_id)
+                    if label_str and label_str.lower() != "background":
+                        detected_frame_label = label_str
 
             # --- ERKENNUNG 2: Farbringe (falls kein Buchstabe Vorrang hatte) ---
             if not detected_frame_label:
@@ -344,11 +350,11 @@ class CameraAIThread(threading.Thread):
 
             # --- FILTERUNG, ABSICHERUNG & WATCHDOG ---
             if detected_frame_label:
-                # 1. Erfolgreicher Fund: Zeitstempel auf JETZT setzen
+                # Erfolgreicher Fund
                 self.last_detection_time = time.time()
                 self.frame_counter += 1
                 
-                # Erster valider Kontakt -> Hardware-Pin HIGH
+                # Hardware-Pin HIGH
                 if self.frame_counter == 1:
                     output_pin.on()
                     print(f"[{self.side_code}] Target gesichtet! Pin HIGH.")
@@ -359,25 +365,20 @@ class CameraAIThread(threading.Thread):
                 elif detected_frame_label == "U": self.Counter_Unharmed += 1
 
             else:
-                # 2. Kein Fund in diesem Frame: Watchdog prüfen!
+                # Kein Fund in diesem Frame: Watchdog prüfen
                 if self.frame_counter > 0:
                     verstrichene_zeit = time.time() - self.last_detection_time
-                    
                     if verstrichene_zeit > self.TIMEOUT_DURATION:
                         print(f"[{self.side_code}] Watchdog: 3s ohne Kontakt. Daten verworfen, Pin LOW.")
                         self.reset_logic()
-                        # self.enabled bleibt True, Kamera sucht sofort weiter!
 
             # --- ERGEBNIS ÜBERTRAGEN ---
-            # Wenn 5 Übereinstimmungen gesammelt wurden -> Auswertung absenden
             if self.frame_counter >= 5:
                 counts = {'H': self.Counter_Harmed, 'S': self.Counter_Safe, 'U': self.Counter_Unharmed}
                 cam_transmit = max(counts, key=counts.get)
                 
-                # Übertragung via Serial (bspw. <LH>)
                 SerialWrite(cam_transmit, self.side_code)
                 
-                # Hardware-Pin wieder LOW, Zähler zurücksetzen und in den Ruhezustand wechseln
                 output_pin.off()
                 print(f"[{self.side_code}] Transfer abgeschlossen. Pin LOW.")
                 self.reset_logic()
@@ -408,23 +409,15 @@ try:
                 if start != -1 and end > start:
                     cmd = buffer[start+1:end]
                     
-                    # --- BEFEHLSAUSWERTUNG ---
-                    
-                    # INITIALISIERUNG
                     if cmd == "I":
                         SerialWrite("OK")
-                    
-                    # AKTIVIERUNG BOTH CAMERAS / REAKTIVIEREN
                     elif cmd == "E":
                         cam_left.enabled = True
                         cam_right.enabled = True
                         SerialWrite("OK")
-                        
                     elif cmd == "RE":
                         cam_right.enabled = True
                         SerialWrite("OK")
-                    
-                    # DEAKTIVIERUNG / IDLE
                     elif cmd == "D":
                         cam_left.enabled = False
                         cam_left.reset_logic()
@@ -436,7 +429,7 @@ try:
                         cam_right.reset_logic()
                         SerialWrite("OK")
                 
-                buffer = "" # Puffer leeren
+                buffer = "" 
         
         time.sleep(0.01)
 
