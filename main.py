@@ -9,6 +9,13 @@ import math
 from collections import Counter
 from gpiozero import DigitalOutputDevice
 
+# --- ToF Modul importieren ---
+try:
+    import tof
+except ImportError:
+    print("Warnung: tof.py nicht gefunden. ToF-Logik wird übersprungen.")
+    tof = None
+
 # ==========================================
 # 1. INITIALISIERUNG & IMPORT-BLOCK
 # ==========================================
@@ -35,11 +42,15 @@ except ImportError:
 MODEL_PATH = "trainedEdgeClean.tflite" # Reines CPU-Modell
 LABEL_PATH = "labels.txt"
 MIN_CONFIDENCE = 0.6
-SERIAL_PORT = '/dev/ttyAMA0'  # Ggf. anpassen auf /dev/ttyUSB0
+SERIAL_PORT = '/dev/ttyAMA0'  # Ggf. anpassen
 BAUD_RATE = 115200
-TRIGGER_PIN = 17              # Gemeinsamer Pin für beide Kameras
 
-# Globaler Pin (Shared Resource)
+# --- PINS DEFINIEREN ---
+TRIGGER_PIN = 17              # Gemeinsamer Pin bei Fund (Target gesichtet)
+ACTIVE_PIN_L = 27             # Status-Pin Kamera Links aktiv
+ACTIVE_PIN_R = 22             # Status-Pin Kamera Rechts aktiv
+
+# GPIO Objekte erstellen
 output_pin = DigitalOutputDevice(TRIGGER_PIN)
 
 # Serial Setup
@@ -62,17 +73,15 @@ LABELS = load_labels(LABEL_PATH)
 # 3. SERIAL HELFER
 # ==========================================
 def SerialWrite(obj, camside=None):
-    """Sendet Nachrichten im Format <OK> oder <LH>, <RS> etc. an den Arduino."""
     if ser:
         msg = f"<{camside}{obj}>\n" if camside else f"<{obj}>\n"
         ser.write(msg.encode('utf-8'))
         print(f"[SERIAL] Gesendet: {msg.strip()}")
 
 # ==========================================
-# 4. GEOMETRIE- & FARBFUNKTIONEN (CIRCLE DETECTION)
+# 4. GEOMETRIE- & FARBFUNKTIONEN
 # ==========================================
 def order_points(pts):
-    """Sortiert 4 Koordinaten für das korrekte Entzerren (Warping)."""
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
     rect[0] = pts[np.argmin(s)]
@@ -83,9 +92,12 @@ def order_points(pts):
     return rect
 
 def find_target_corners(image_bgr):
-    # Sperrzonen für den Ring-Scan dynamisch berechnen
     cutoff_top_y = int(image_bgr.shape[0] * 0.25)
     cutoff_bottom_y = int(image_bgr.shape[0] * 0.875)
+    
+    # --- Vertikale Sperrzonen fuer Ringe ---
+    cutoff_left_x = int(image_bgr.shape[1] * (1/7))
+    cutoff_right_x = int(image_bgr.shape[1] * (6/7))
     
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -99,8 +111,12 @@ def find_target_corners(image_bgr):
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
         
-        # Ring in toter Zone ignorieren
+        # Horizontale Sperre (Oben/Unten)
         if y < cutoff_top_y or (y + h) > cutoff_bottom_y: 
+            continue
+            
+        # Vertikale Sperre (Links/Rechts)
+        if x < cutoff_left_x or (x + w) > cutoff_right_x:
             continue
             
         area = cv2.contourArea(cnt)
@@ -119,7 +135,6 @@ def find_target_corners(image_bgr):
     return None
 
 def warp_target(image_bgr, corners, output_size=200):
-    """Generiert eine perfekt zentrierte, flache Aufsicht des Targets."""
     dst_points = np.array([
         [0, 0],
         [output_size - 1, 0],
@@ -131,7 +146,6 @@ def warp_target(image_bgr, corners, output_size=200):
     return cv2.warpPerspective(image_bgr, matrix, (output_size, output_size))
 
 def classify_color(hsv_pixel):
-    """Ordnet HSV-Pixel vordefinierten Farbräumen zu (inkl. Glare-Filter)."""
     h, s, v = hsv_pixel
     if v < 60: return "Black"
     if s < 50 and v > 200: return "White" 
@@ -143,7 +157,6 @@ def classify_color(hsv_pixel):
     return "Unknown"
 
 def scan_target_colors(warped_image_bgr):
-    """Führt den 12-Speichen Stern-Scan auf den 5 Ring-Radien durch."""
     hsv_image = cv2.cvtColor(warped_image_bgr, cv2.COLOR_BGR2HSV)
     center = (100, 100)
     radii = [10, 30, 50, 70, 90]
@@ -171,42 +184,42 @@ def scan_target_colors(warped_image_bgr):
     return final_colors
 
 def calculate_victim_health(colors):
-    """Berechnet den Zustand der Ring-Opfer laut Regelwerk."""
     color_values = {"Yellow": 0, "Blue": 2, "Red": -1, "Black": -2, "Green": 1}
     total_sum = 0
     for color in colors:
         total_sum += color_values.get(color, 0)
         
     status = "Fake"
-    if total_sum == 0: status = "U"   # Unharmed
-    elif total_sum == 1: status = "S" # Stable
-    elif total_sum == 2: status = "H" # Harmed
+    if total_sum == 0: status = "U"   
+    elif total_sum == 1: status = "S" 
+    elif total_sum == 2: status = "H" 
     return status, total_sum
 
 # ==========================================
-# 5. MULTITHREADED KAMERA AI + CIRCLE KLASSE
+# 5. MULTITHREADED KAMERA AI THREAD KLASSE
 # ==========================================
 class CameraAIThread(threading.Thread):
-    def __init__(self, cam_id, side_code):
+    def __init__(self, cam_id, side_code, status_gpio_pin):
         super().__init__()
         self.cam_id = cam_id
         self.side_code = side_code
         self.enabled = False
         self.running = True
         
-        # Sicherheits-Zähler
+        self.waiting_for_reset = False
+        
+        self.status_pin = DigitalOutputDevice(status_gpio_pin)
+        self.status_pin.off()
+        
         self.Counter_Harmed = 0
         self.Counter_Safe = 0
         self.Counter_Unharmed = 0
         self.frame_counter = 0
         
-        # Watchdog
         self.last_detection_time = 0.0
         self.TIMEOUT_DURATION = 3.0
+        self.fps = 0.0
         
-        # ==========================================
-        # TFLite Modell laden (REINER CPU MODUS)
-        # ==========================================
         try:
             self.interpreter = tflite.Interpreter(model_path=MODEL_PATH)
             self.interpreter.allocate_tensors()
@@ -215,20 +228,17 @@ class CameraAIThread(threading.Thread):
             self.ki_h, self.ki_w = self.input_details[0]['shape'][1:3]
             self.is_int8 = (self.input_details[0]['dtype'] in [np.int8, np.uint8])
             self.ready = True
-            print(f"Cam {self.side_code} CPU Modell erfolgreich geladen.")
-            
+            print(f"Cam {self.side_code} CPU Modell geladen.")
         except Exception as e:
-            print(f"Cam {self.side_code} TFLite-Fehler: {e}")
+            print(f"Cam {self.side_code} Fehler: {e}")
             self.ready = False
 
     def reset_logic(self):
         self.Counter_Harmed = self.Counter_Safe = self.Counter_Unharmed = 0
         self.frame_counter = 0
-        output_pin.off()
 
     def run(self):
         if not self.ready: return
-        
         try:
             picam2 = Picamera2(self.cam_id)
             config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (640, 480)})
@@ -238,25 +248,60 @@ class CameraAIThread(threading.Thread):
             print(f"Hardware-Fehler Cam {self.side_code}: {e}")
             return
 
-        print(f"Thread {self.side_code} (Cam {self.cam_id}) aktiv und bereit.")
+        print(f"Thread {self.side_code} aktiv.")
+        previous_time = time.time()
+        frame_count = 0
+        last_fps_time = time.time()
 
         while self.running:
-            if not self.enabled:
+            # --- STATUS PIN LOGIK 1: Warten auf Reset ---
+            if self.waiting_for_reset:
+                self.status_pin.on()
                 time.sleep(0.1)
                 continue
 
+            # --- STATUS PIN LOGIK 2: Normalbetrieb (Arduino deaktiviert) ---
+            if not self.enabled:
+                self.status_pin.off()
+                time.sleep(0.1)
+                continue
+
+            # --- STATUS PIN LOGIK 3: Normalbetrieb (TOF sagt keine Wand) ---
+            if tof and tof.state[self.side_code] == 0:
+                self.status_pin.off()
+                if self.frame_counter > 0:
+                    self.reset_logic()
+                    output_pin.off()
+                    print(f"[{self.side_code}] Wand verloren. Reset.")
+                time.sleep(0.05)
+                continue
+
+            # --- BEIDE BEDINGUNGEN ERFÜLLT: KAMERA ARBEITET ---
+            self.status_pin.on()
+
             frame_rgb = picam2.capture_array()
-            # 180 Grad Drehung für Hardwareausgleich
+            
+            current_time = time.time()
+            frame_count += 1
+            if current_time - last_fps_time > 1.0:
+                self.fps = frame_count / (current_time - last_fps_time)
+                print(f"[{self.side_code}] FPS: {self.fps:.1f}")
+                frame_count = 0
+                last_fps_time = current_time
+
             frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
             
-            # Sperrzonen berechnen
             cutoff_top_y = int(frame_rgb.shape[0] * 0.25)
             cutoff_bottom_y = int(frame_rgb.shape[0] * 0.875)
             
+            # --- Vertikale Sperrzonen fuer Buchstaben ---
+            cutoff_left_x = int(frame_rgb.shape[1] * (1/7))
+            cutoff_right_x = int(frame_rgb.shape[1] * (6/7))
+
             detected_frame_label = None
 
-            # --- ERKENNUNG 1: TFLite Buchstaben (Gefiltert) ---
+            # --- ERKENNUNG 1: Buchstaben ---
             gray_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
             total_area = gray_frame.shape[0] * gray_frame.shape[1]
             
@@ -272,22 +317,19 @@ class CameraAIThread(threading.Thread):
                 x_tmp, y_tmp, w_tmp, h_tmp = cv2.boundingRect(c)
                 if h_tmp == 0: continue 
                 
-                # 1. Tote Zonen (Sperrzonen oben und unten)
-                if y_tmp < cutoff_top_y or (y_tmp + h_tmp) > cutoff_bottom_y:
-                    continue
-                    
-                # 2. Absolute Pixel-Grenzen (mindestens 60px, maximal 360px)
-                if w_tmp < 60 or h_tmp < 60:
-                    continue
-                if w_tmp > 360 or h_tmp > 360:
-                    continue
-                    
-                # 3. Aspekt-Ratio (Rechteckigkeit)
+                # Horizontale Sperre
+                if y_tmp < cutoff_top_y or (y_tmp + h_tmp) > cutoff_bottom_y: continue
+                
+                # Vertikale Sperre
+                if x_tmp < cutoff_left_x or (x_tmp + w_tmp) > cutoff_right_x: continue
+                
+                if w_tmp < 60 or h_tmp < 60: continue
+                if w_tmp > 360 or h_tmp > 360: continue
+                
                 aspect_ratio = w_tmp / float(h_tmp)
                 if 0.5 <= aspect_ratio <= 2.0:
                     square_contours.append(c)
 
-            # --- KI-INFERENZ (Wird NUR gestartet, wenn alles gepasst hat) ---
             if square_contours:
                 largest_contour = max(square_contours, key=cv2.contourArea)
                 x_b, y_b, w_b, h_b = cv2.boundingRect(largest_contour)
@@ -297,19 +339,15 @@ class CameraAIThread(threading.Thread):
                 FILL_RATIO = 0.7
                 max_dim = max(w_b, h_b)
                 target_dim = int(max_dim / FILL_RATIO)
-                
                 pad_top = (target_dim - h_b) // 2
                 pad_bottom = target_dim - h_b - pad_top
                 pad_left = (target_dim - w_b) // 2
                 pad_right = target_dim - w_b - pad_left
-                
                 bg_color = int(np.median(gray_frame[0:10, 0:10]))
-                
                 padded_img = cv2.copyMakeBorder(letter_crop, pad_top, pad_bottom, pad_left, pad_right, 
                                                 cv2.BORDER_CONSTANT, value=bg_color)
                 prep_img = cv2.resize(padded_img, (self.ki_w, self.ki_h), interpolation=cv2.INTER_AREA)
-
-                # Vorbereitung für den Interpreter
+                
                 prep_img_expanded = np.expand_dims(prep_img, axis=-1)
                 input_data = np.expand_dims(prep_img_expanded, axis=0)
 
@@ -337,64 +375,58 @@ class CameraAIThread(threading.Thread):
                     if label_str and label_str.lower() != "background":
                         detected_frame_label = label_str
 
-            # --- ERKENNUNG 2: Farbringe (falls kein Buchstabe Vorrang hatte) ---
+            # --- ERKENNUNG 2: Farbringe ---
             if not detected_frame_label:
-                corners = find_target_corners(frame_bgr)
-                if corners is not None:
-                    warped = warp_target(frame_bgr, corners)
+                detected_corners = find_target_corners(frame_bgr)
+                if detected_corners is not None:
+                    warped = warp_target(frame_bgr, detected_corners)
                     colors = scan_target_colors(warped)
                     circle_status, _ = calculate_victim_health(colors)
-                    
                     if circle_status in ["H", "S", "U"]:
                         detected_frame_label = circle_status
 
-            # --- FILTERUNG, ABSICHERUNG & WATCHDOG ---
+            # --- FILTERUNG & WATCHDOG ---
             if detected_frame_label:
-                # Erfolgreicher Fund
-                self.last_detection_time = time.time()
+                self.last_detection_time = current_time
                 self.frame_counter += 1
-                
-                # Hardware-Pin HIGH
                 if self.frame_counter == 1:
-                    output_pin.on()
-                    print(f"[{self.side_code}] Target gesichtet! Pin HIGH.")
-
-                # Zähler erhöhen
+                    output_pin.on() 
                 if detected_frame_label == "H": self.Counter_Harmed += 1
                 elif detected_frame_label == "S": self.Counter_Safe += 1
                 elif detected_frame_label == "U": self.Counter_Unharmed += 1
-
             else:
-                # Kein Fund in diesem Frame: Watchdog prüfen
                 if self.frame_counter > 0:
-                    verstrichene_zeit = time.time() - self.last_detection_time
+                    verstrichene_zeit = current_time - self.last_detection_time
                     if verstrichene_zeit > self.TIMEOUT_DURATION:
-                        print(f"[{self.side_code}] Watchdog: 3s ohne Kontakt. Daten verworfen, Pin LOW.")
+                        print(f"[{self.side_code}] Watchdog: Reset.")
                         self.reset_logic()
+                        output_pin.off()
 
             # --- ERGEBNIS ÜBERTRAGEN ---
-            if self.frame_counter >= 5:
+            if self.frame_counter >= 20:
                 counts = {'H': self.Counter_Harmed, 'S': self.Counter_Safe, 'U': self.Counter_Unharmed}
                 cam_transmit = max(counts, key=counts.get)
-                
                 SerialWrite(cam_transmit, self.side_code)
-                
-                output_pin.off()
-                print(f"[{self.side_code}] Transfer abgeschlossen. Pin LOW.")
+                print(f"[{self.side_code}] Transfer abgeschlossen. Warte auf <R>.")
                 self.reset_logic()
                 
-                
-                ######## AUSKOMMENTIERUNG RÜCKGÄNGIG MACHEN!!!######
-                #self.enabled = False 
-                ####################################################
+                # Gehe in den "Warte auf Reset" Modus
+                self.enabled = False 
+                self.waiting_for_reset = True
 
         picam2.stop()
+        self.status_pin.off()
 
 # ==========================================
 # 6. MAIN-STEUERUNG: PROTOKOLL LISTENER
 # ==========================================
-cam_left = CameraAIThread(0, "L")
-cam_right = CameraAIThread(1, "R")
+
+if tof:
+    print("Starte TOF Sensoren...")
+    tof.start()
+
+cam_right = CameraAIThread(0, "R", ACTIVE_PIN_R)
+cam_left = CameraAIThread(1, "L", ACTIVE_PIN_L)
 cam_left.start()
 cam_right.start()
 
@@ -412,22 +444,47 @@ try:
                 end = buffer.find(">")
                 if start != -1 and end > start:
                     cmd = buffer[start+1:end]
+                    print("Arduino Command: ", cmd)
                     
                     if cmd == "I":
                         SerialWrite("OK")
+                    
                     elif cmd == "E":
                         cam_left.enabled = True
                         cam_right.enabled = True
                         SerialWrite("OK")
+                    
                     elif cmd == "D":
                         cam_left.enabled = False
+                        cam_left.waiting_for_reset = False
                         cam_left.reset_logic()
+                        
                         cam_right.enabled = False
+                        cam_right.waiting_for_reset = False
                         cam_right.reset_logic()
+                        
+                        output_pin.off()
                         SerialWrite("OK")
-                
+                    
+                    elif cmd == "R":
+                        output_pin.off() 
+                        cam_left.waiting_for_reset = False
+                        cam_right.waiting_for_reset = False
+                        cam_left.enabled = False
+                        cam_right.enabled = False
+                        
+                        print("Alerts Resetet. Kameras schlafen 2 Sekunden...")
+                        time.sleep(2.0)
+                        
+                        cam_left.enabled = True
+                        cam_left.reset_logic()
+                        cam_right.enabled = True
+                        cam_right.reset_logic()
+                        
+                        SerialWrite("OK")
+                        print("Kameras wieder aktiviert.")
+                        
                 buffer = "" 
-        
         time.sleep(0.01)
 
 except KeyboardInterrupt:
