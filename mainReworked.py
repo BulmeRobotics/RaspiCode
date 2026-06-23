@@ -478,8 +478,9 @@ class CameraAIThread(threading.Thread):
                         # immediately transmit the most common H/S/U result and enter waiting state.
                         if label_str.upper() == 'C':
                             detected_frame_label = 'C'
-                            print(f"[{self.side_code}] Kognitives Ziel erkannt (C). Starte Farbauswertung...")
-                            color_result = self.evaluate_color_target(picam2, samples=7, delay=0.03)
+                            # Print confidence for C
+                            print(f"[{self.side_code}] Kognitives Ziel erkannt (C). Confidence: {confidence:.3f}. Starte Farbauswertung...")
+                            color_result = self.evaluate_color_target(picam2, samples=3, delay=0.03)
                             if color_result:
                                 # sofort senden und warten auf Reset
                                 self.serial_mgr.write(color_result, self.side_code)
