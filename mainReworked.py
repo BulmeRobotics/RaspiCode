@@ -247,6 +247,11 @@ class CameraAIThread(threading.Thread):
         self.last_detection_time = 0.0
         self.TIMEOUT_DURATION = 2.0
         self.fps = 0.0
+        # ToF debounce
+        self.tof_filtered = True
+        self._tof_last_raw = None
+        self._tof_last_change = 0.0
+        self.TOF_DEBOUNCE = 0.2
         
         try:
             self.interpreter = tflite.Interpreter(model_path=MODEL_PATH)
@@ -292,6 +297,30 @@ class CameraAIThread(threading.Thread):
         last_fps_time = time.time()
 
         while self.running:
+            # current time used for debounce and other timing
+            current_time = time.time()
+
+            # --- ToF Debounce: require stable state for TOF_DEBOUNCE seconds ---
+            if tof:
+                try:
+                    raw = (tof.state[self.side_code] != 0)
+                except Exception:
+                    raw = True
+            else:
+                raw = True
+
+            if self._tof_last_raw is None:
+                self._tof_last_raw = raw
+                self._tof_last_change = current_time
+            elif raw != self._tof_last_raw:
+                # state changed, restart timer
+                self._tof_last_raw = raw
+                self._tof_last_change = current_time
+            else:
+                # state stable long enough -> accept
+                if (current_time - self._tof_last_change) >= self.TOF_DEBOUNCE:
+                    self.tof_filtered = raw
+
             if self.waiting_for_reset:
                 self.status_pin.on()
                 # Keep alert_active True so the global alert pin remains active
@@ -305,8 +334,11 @@ class CameraAIThread(threading.Thread):
                 time.sleep(0.1)
                 continue
 
-            if tof and tof.state[self.side_code] == 0:
+            # Use filtered ToF value
+            if tof and not self.tof_filtered:
                 self.status_pin.off()
+                # If this camera loses the wall, clear its alert so it doesn't keep the global trigger active.
+                self.alert_active = False
                 if self.frame_counter > 0:
                     self.reset_logic()
                     print(f"[{self.side_code}] Wand verloren. Reset.")
@@ -320,7 +352,7 @@ class CameraAIThread(threading.Thread):
             
             if current_time - last_fps_time > 1.0:
                 self.fps = frame_count / (current_time - last_fps_time)
-                print(f"[{self.side_code}] FPS: {self.fps:.1f}")
+                #print(f"[{self.side_code}] FPS: {self.fps:.1f}")
                 frame_count = 0
                 last_fps_time = current_time
 
@@ -457,7 +489,7 @@ class CameraAIThread(threading.Thread):
                 if self.last_detection_time > 0:
                     verstrichene_zeit = current_time - self.last_detection_time
                     # Debug-Ausgabe zur Fehlersuche
-                    print(f"[{self.side_code}] Keine Erkennung. Zeit seit letzter Detektion: {verstrichene_zeit:.2f}s, frame_counter={self.frame_counter}")
+                    #print(f"[{self.side_code}] Keine Erkennung. Zeit seit letzter Detektion: {verstrichene_zeit:.2f}s, frame_counter={self.frame_counter}")
                     if verstrichene_zeit > self.TIMEOUT_DURATION:
                         print(f"[{self.side_code}] Watchdog: Reset.")
                         self.reset_logic()
@@ -530,7 +562,18 @@ try:
                 serial_mgr.write("OK")
                 print("Disabled")
 
-        if cam_left.alert_active or cam_right.alert_active:
+        # --- GLOBAL ALERT / TRIGGER-LOGIK ---
+        # Entscheide ob der globale Trigger-Output gesetzt werden soll.
+        def cam_has_wall(cam):
+            try:
+                return getattr(cam, 'tof_filtered', True)
+            except Exception:
+                return True
+
+        left_valid = cam_left.alert_active and cam_has_wall(cam_left)
+        right_valid = cam_right.alert_active and cam_has_wall(cam_right)
+
+        if left_valid or right_valid:
             output_pin.on()
             #print("Alert Pin High")
         else:
