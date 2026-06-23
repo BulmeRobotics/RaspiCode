@@ -61,6 +61,55 @@ def order_points(pts):
 def find_target_corners(image_bgr):
     cutoff_top_y = int(image_bgr.shape[0] * 0.25)
     cutoff_bottom_y = int(image_bgr.shape[0] * 0.875)
+    
+    cutoff_left_x = int(image_bgr.shape[1] * (1/7))
+    cutoff_right_x = int(image_bgr.shape[1] * (6/7))
+    
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (7, 7), 0) # Leicht stärkerer Blur gegen Bildrauschen
+    
+    # 1. Sensiblerer Canny-Filter
+    edges = cv2.Canny(blurred, 30, 100)
+    
+    # 2. NEU: Dilatation (Linien dicker machen, um Lücken im Kanten-Ring zu schließen)
+    kernel = np.ones((5, 5), np.uint8)
+    edges = cv2.dilate(edges, kernel, iterations=1)
+
+    # 3. NEU: RETR_LIST statt RETR_EXTERNAL, um wirklich alle Ebenen zu betrachten
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    # Absteigend nach Größe sortieren (der größte gültige Ring gewinnt immer)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        
+        # Horizontale Sperre (Oben/Unten)
+        if y < cutoff_top_y or (y + h) > cutoff_bottom_y: 
+            continue
+            
+        # Vertikale Sperre (Links/Rechts)
+        if x < cutoff_left_x or (x + w) > cutoff_right_x:
+            continue
+            
+        area = cv2.contourArea(cnt)
+        if area > 1000:
+            rect = cv2.minAreaRect(cnt)
+            box = cv2.boxPoints(rect)
+            box = np.int32(box) 
+            
+            width = rect[1][0]
+            height = rect[1][1]
+            if height == 0: continue
+            aspect_ratio = width / height
+            
+            # Toleranz für das Rechteck/Quadrat (Ring von der Seite gesehen ist gestaucht)
+            if 0.7 <= aspect_ratio <= 1.3:
+                return order_points(box)
+    return None
+    cutoff_top_y = int(image_bgr.shape[0] * 0.25)
+    cutoff_bottom_y = int(image_bgr.shape[0] * 0.875)
     cutoff_left_x = int(image_bgr.shape[1] * (1/7))
     cutoff_right_x = int(image_bgr.shape[1] * (6/7))
     
