@@ -42,6 +42,8 @@ def main():
 
             # 1. Frame holen (Identisch zum Live-Code)
             frame_rgb = picam2.capture_array()
+            # Bild um 180° "auf den Kopf" drehen (Spiegelung an horizontaler Achse)
+            frame_rgb = cv2.flip(frame_rgb, 0)
             
             # 2. Konvertierung für OpenCV/Modell (Identisch zum Live-Code)
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
