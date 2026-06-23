@@ -342,14 +342,22 @@ class CameraAIThread(threading.Thread):
             if self._tof_last_raw is None:
                 self._tof_last_raw = raw
                 self._tof_last_change = current_time
-            elif raw != self._tof_last_raw:
-                # state changed, restart timer
+
+            # detect changes and timestamp
+            if raw != self._tof_last_raw:
                 self._tof_last_raw = raw
                 self._tof_last_change = current_time
-            else:
-                # state stable long enough -> accept
+
+            # Asymmetric debounce:
+            # - If raw == False (wall lost) -> update filtered state immediately
+            # - If raw == True (wall present)  -> wait TOF_DEBOUNCE seconds of stability
+            if not raw and self.tof_filtered:
+                # immediate loss
+                self.tof_filtered = False
+            elif raw and not self.tof_filtered:
+                # require stable presence for debounce interval
                 if (current_time - self._tof_last_change) >= self.TOF_DEBOUNCE:
-                    self.tof_filtered = raw
+                    self.tof_filtered = True
 
             if self.waiting_for_reset:
                 self.status_pin.on()
