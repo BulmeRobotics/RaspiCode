@@ -55,8 +55,8 @@ ACTIVE_PIN_R = 22      # Status Pin Kamera R    CM5 GPIO22 -> Giga 28
 # --- STREAM CONFIGURATION (Defines) ---
 # Schaltet die CV2-Fenster und zugehörigen Zeichenoperationen ein/aus.
 # Bei False gibt es keinerlei Performance-Einbußen, da die GUI-Logik übersprungen wird.
-SHOW_STREAM_L = False
-SHOW_STREAM_R = True
+SHOW_STREAM_L = True
+SHOW_STREAM_R = False
 
 # GPIO Objekte erstellen
 output_pin = DigitalOutputDevice(TRIGGER_PIN)
