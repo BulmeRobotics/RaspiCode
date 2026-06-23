@@ -459,6 +459,7 @@ class CameraAIThread(threading.Thread):
                         print(f"[{self.side_code}] Watchdog: Reset.")
                         self.reset_logic()
                         self.alert_active = False
+                        print(f"[{self.side_code}] Alert Pin Low")
 
             # --- ERGEBNIS ÜBERTRAGEN ---
             if self.frame_counter >= 20:
