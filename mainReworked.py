@@ -541,10 +541,10 @@ class CameraAIThread(threading.Thread):
                     # Debug-Ausgabe zur Fehlersuche
                     #print(f"[{self.side_code}] Keine Erkennung. Zeit seit letzter Detektion: {verstrichene_zeit:.2f}s, frame_counter={self.frame_counter}")
                     if verstrichene_zeit > self.TIMEOUT_DURATION:
-                        print(f"[{self.side_code}] Watchdog: Reset.")
+                        #print(f"[{self.side_code}] Watchdog: Reset.")
                         self.reset_logic()
                         self.alert_active = False
-                        print(f"[{self.side_code}] Alert Pin Low")
+                        #print(f"[{self.side_code}] Alert Pin Low")
 
             # --- ERGEBNIS ÜBERTRAGEN ---
             if self.frame_counter >= 15:
