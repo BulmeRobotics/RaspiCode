@@ -77,12 +77,12 @@ def warp_target(image_bgr, corners, output_size=200):
 def classify_color(hsv_pixel):
     h, s, v = hsv_pixel
     if v < 60: return "Black"
-    if s < 50 and v > 200: return "White" 
+    #if s < 50 and v > 200: return "White" 
 
-    if h < 10 or h > 160: return "Red"
-    elif 20 < h < 35: return "Yellow"
-    elif 40 < h < 80: return "Green"
-    elif 90 < h < 130: return "Blue"
+    if h < 12 or h > 100: return "Red"
+    elif 69 < h < 103: return "Yellow"
+    elif 40 < h < 70: return "Green"
+    elif 10 < h < 30: return "Blue"
     return "Unknown"
 
 def scan_target_colors(warped_image_bgr, debug=False):
