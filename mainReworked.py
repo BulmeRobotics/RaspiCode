@@ -474,11 +474,25 @@ class CameraAIThread(threading.Thread):
                 if confidence > MIN_CONFIDENCE:
                     label_str = LABELS.get(best_class_id)
                     if label_str and label_str.lower() != "background":
-                        # If model predicts Cognitive target 'C', run multiple color-evaluations
-                        if label_str == 'C':
+                        # Treat label C as cognitive target: show 'C', then evaluate color rings multiple times and
+                        # immediately transmit the most common H/S/U result and enter waiting state.
+                        if label_str.upper() == 'C':
+                            detected_frame_label = 'C'
+                            print(f"[{self.side_code}] Kognitives Ziel erkannt (C). Starte Farbauswertung...")
                             color_result = self.evaluate_color_target(picam2, samples=7, delay=0.03)
                             if color_result:
-                                detected_frame_label = color_result
+                                # sofort senden und warten auf Reset
+                                self.serial_mgr.write(color_result, self.side_code)
+                                print(f"[{self.side_code}] Farbauswertung Ergebnis: {color_result} - gesendet. Warte auf <D>.")
+                                # setze Flags entsprechend
+                                self.reset_logic()
+                                self.enabled = False
+                                self.waiting_for_reset = True
+                                self.alert_active = True
+                                # skip further processing this frame
+                                continue
+                            else:
+                                print(f"[{self.side_code}] Farbauswertung lieferte kein Ergebnis.")
                         else:
                             detected_frame_label = label_str
 
