@@ -527,11 +527,11 @@ try:
 
         if cam_left.alert_active or cam_right.alert_active:
             output_pin.on()
-            print("Alert Pin High")
+            #print("Alert Pin High")
         else:
             output_pin.off()
-            print("Alert Pin Low")
-                
+            #print("Alert Pin Low")
+
         time.sleep(0.01)
 
 except KeyboardInterrupt:
