@@ -448,6 +448,7 @@ class CameraAIThread(threading.Thread):
                 self.last_detection_time = current_time
                 self.frame_counter += 1
                 self.alert_active = True
+                print(f"[{self.side_code}] Detektion: {detected_frame_label}")
                 if detected_frame_label == "H": self.Counter_Harmed += 1
                 elif detected_frame_label == "S": self.Counter_Safe += 1
                 elif detected_frame_label == "U": self.Counter_Unharmed += 1
@@ -460,7 +461,7 @@ class CameraAIThread(threading.Thread):
                         self.alert_active = False
 
             # --- ERGEBNIS ÜBERTRAGEN ---
-            if self.frame_counter >= 30:
+            if self.frame_counter >= 20:
                 counts = {'H': self.Counter_Harmed, 'S': self.Counter_Safe, 'U': self.Counter_Unharmed}
                 cam_transmit = max(counts, key=counts.get)
                 self.serial_mgr.write(cam_transmit, self.side_code)
