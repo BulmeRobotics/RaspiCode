@@ -44,7 +44,7 @@ except ImportError:
 MODEL_PATH = "trainedCog.tflite" 
 LABEL_PATH = "labelsCog.txt"
 MIN_CONFIDENCE = 0.7
-MIN_CONFIDENCE_C = 0.5  # Lower threshold for cognitive target 'C'
+MIN_CONFIDENCE_C = 0.4  # Lower threshold for cognitive target 'C'
 SERIAL_PORT = '/dev/ttyAMA0'    #Serialler Port zum Arduino
 BAUD_RATE = 115200
 
