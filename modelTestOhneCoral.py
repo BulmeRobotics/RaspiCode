@@ -162,7 +162,7 @@ except Exception as e:
 # ==========================================
 print("Starte Picamera2...")
 try:
-    picam2 = Picamera2(0) 
+    picam2 = Picamera2() 
     config = picam2.create_preview_configuration(main={"format": "RGB888", "size": (640, 480)})
     picam2.configure(config)
     picam2.start()
