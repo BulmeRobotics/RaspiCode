@@ -274,7 +274,7 @@ class CameraAIThread(threading.Thread):
     def reset_logic(self):
         self.Counter_Harmed = self.Counter_Safe = self.Counter_Unharmed = 0
         self.frame_counter = 0
-        self.alert_active = False
+        #self.alert_active = False
 
     def run(self):
         if not self.ready: return
