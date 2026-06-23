@@ -547,7 +547,7 @@ class CameraAIThread(threading.Thread):
                         #print(f"[{self.side_code}] Alert Pin Low")
 
             # --- ERGEBNIS ÜBERTRAGEN ---
-            if self.frame_counter >= 15:
+            if self.frame_counter >= 10:
                 counts = {'H': self.Counter_Harmed, 'S': self.Counter_Safe, 'U': self.Counter_Unharmed}
                 cam_transmit = max(counts, key=counts.get)
                 self.serial_mgr.write(cam_transmit, self.side_code)
