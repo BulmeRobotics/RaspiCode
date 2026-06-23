@@ -39,8 +39,10 @@ except ImportError:
 # ==========================================
 # 2. KONFIGURATION
 # ==========================================
-MODEL_PATH = "trainedEdgeClean.tflite" 
-LABEL_PATH = "labels.txt"
+#MODEL_PATH = "trainedEdgeClean.tflite" 
+#LABEL_PATH = "labels.txt"
+MODEL_PATH = "trainedCog.tflite" 
+LABEL_PATH = "labelsCog.txt"
 MIN_CONFIDENCE = 0.6
 SERIAL_PORT = '/dev/ttyAMA0'    #Serialler Port zum Arduino
 BAUD_RATE = 115200
@@ -281,6 +283,33 @@ class CameraAIThread(threading.Thread):
         self.frame_counter = 0
         #self.alert_active = False
 
+    def evaluate_color_target(self, picam2, samples=7, delay=0.03):
+        """Capture a few frames and evaluate the color rings; return the most common H/S/U or None."""
+        votes = []
+        for i in range(samples):
+            try:
+                sample_rgb = picam2.capture_array()
+            except Exception:
+                continue
+            # rotate same as main loop
+            sample_rgb = cv2.rotate(sample_rgb, cv2.ROTATE_180)
+            sample_bgr = cv2.cvtColor(sample_rgb, cv2.COLOR_RGB2BGR)
+
+            detected_corners = find_target_corners(sample_bgr)
+            if detected_corners is not None:
+                warped = warp_target(sample_bgr, detected_corners)
+                colors = scan_target_colors(warped)
+                circle_status, _ = calculate_victim_health(colors)
+                if circle_status in ["H", "S", "U"]:
+                    votes.append(circle_status)
+            time.sleep(delay)
+
+        if votes:
+            most = Counter(votes).most_common(1)[0][0]
+            print(f"[{self.side_code}] Color-eval votes: {Counter(votes)} -> {most}")
+            return most
+        return None
+
     def run(self):
         if not self.ready: return
         try:
@@ -445,7 +474,13 @@ class CameraAIThread(threading.Thread):
                 if confidence > MIN_CONFIDENCE:
                     label_str = LABELS.get(best_class_id)
                     if label_str and label_str.lower() != "background":
-                        detected_frame_label = label_str
+                        # If model predicts Cognitive target 'C', run multiple color-evaluations
+                        if label_str == 'C':
+                            color_result = self.evaluate_color_target(picam2, samples=7, delay=0.03)
+                            if color_result:
+                                detected_frame_label = color_result
+                        else:
+                            detected_frame_label = label_str
 
             # --- ERKENNUNG 2: Farbringe ---
             if not detected_frame_label:
@@ -579,6 +614,19 @@ try:
         else:
             output_pin.off()
             #print("Alert Pin Low")
+
+        # Auto-reset: falls seit letzter echten Detektion >3s und kein neuer Alarm, reset
+        last_det = max(cam_left.last_detection_time, cam_right.last_detection_time)
+        if last_det > 0 and (time.time() - last_det) > 3.0:
+            if cam_left.alert_active or cam_right.alert_active:
+                print("Auto-reset: keine neue Erkennung innerhalb von 3s. Reset.")
+                cam_left.alert_active = False
+                cam_right.alert_active = False
+                cam_left.waiting_for_reset = False
+                cam_right.waiting_for_reset = False
+                cam_left.reset_logic()
+                cam_right.reset_logic()
+                output_pin.off()
 
         time.sleep(0.01)
 
