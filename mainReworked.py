@@ -177,7 +177,7 @@ def classify_color(hsv_pixel):
     h, s, v = hsv_pixel
     if v < 60: return "Black"
     #if s < 50 and v > 200: return "White" 
-    if h < 10 or h > 100: return "Red"
+    if h < 12 or h > 100: return "Red"
     elif 69 < h < 103: return "Yellow"
     elif 40 < h < 70: return "Green"
     elif 10 < h < 30: return "Blue"
