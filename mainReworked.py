@@ -294,7 +294,8 @@ class CameraAIThread(threading.Thread):
         while self.running:
             if self.waiting_for_reset:
                 self.status_pin.on()
-                self.alert_active = False
+                # Keep alert_active True so the global alert pin remains active
+                # until the Arduino sends <D> to reset the camera.
                 time.sleep(0.1)
                 continue
 
