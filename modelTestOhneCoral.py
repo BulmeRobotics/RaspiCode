@@ -29,15 +29,19 @@ except ImportError:
 # ==========================================
 # 2. KONFIGURATION
 # ==========================================
-MODEL_PATH = "trainedEdgeClean.tflite" 
-LABEL_PATH = "labels.txt"
+#MODEL_PATH = "trainedEdgeClean.tflite" 
+#LABEL_PATH = "labels.txt"
+MODEL_PATH = "trainedCog.tflite" 
+LABEL_PATH = "labelsCog.txt"
+
+
 MIN_CONFIDENCE = 0.6
 
 def load_labels(path):
     if os.path.exists(path):
         with open(path, 'r') as f: 
             return {i: line.strip() for i, line in enumerate(f.readlines())}
-    return {0: "background", 1: "H", 2: "S", 3: "U"}
+    return {0: "C", 1: "H", 2: "S", 3: "U"}
 
 LABELS = load_labels(LABEL_PATH)
 
