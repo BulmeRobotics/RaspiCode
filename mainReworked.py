@@ -457,16 +457,16 @@ class CameraAIThread(threading.Thread):
                     if verstrichene_zeit > self.TIMEOUT_DURATION:
                         print(f"[{self.side_code}] Watchdog: Reset.")
                         self.reset_logic()
+                        self.alert_active = False
 
             # --- ERGEBNIS ÜBERTRAGEN ---
-            if self.frame_counter >= 20:
+            if self.frame_counter >= 30:
                 counts = {'H': self.Counter_Harmed, 'S': self.Counter_Safe, 'U': self.Counter_Unharmed}
                 cam_transmit = max(counts, key=counts.get)
                 self.serial_mgr.write(cam_transmit, self.side_code)
                 print(f"[{self.side_code}] Transfer abgeschlossen. Warte auf <R>.")
                 self.reset_logic()
-                
-                self.enabled = False 
+                self.enabled = False
                 self.waiting_for_reset = True
 
         picam2.stop()
