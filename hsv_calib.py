@@ -7,7 +7,7 @@ from picamera2 import Picamera2
 # ==========================================
 # KONFIGURATION
 # ==========================================
-CAM_ID = 0  # 0 für links, 1 für rechts (je nachdem welche du kalibrieren willst)
+CAM_ID = 1  # 0 für links, 1 für rechts (je nachdem welche du kalibrieren willst)
 
 # Globale Variable für den Klick-Sensor
 hsv_frame_global = None
