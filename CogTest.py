@@ -15,7 +15,7 @@ except ImportError:
 # KONFIGURATION
 # ==========================================
 CAM_ID = 1          # 0 für Left, 1 für Right
-SAMPLES = 5         # Anzahl der Bilder, die für die Bewertung gemacht werden
+SAMPLES = 20         # Anzahl der Bilder, die für die Bewertung gemacht werden
 DELAY_SEC = 0.03    # Pause zwischen den Aufnahmen
 
 # ==========================================
