@@ -245,7 +245,7 @@ class CameraAIThread(threading.Thread):
         self.frame_counter = 0
         
         self.last_detection_time = 0.0
-        self.TIMEOUT_DURATION = 3.0
+        self.TIMEOUT_DURATION = 2.0
         self.fps = 0.0
         
         try:
@@ -453,8 +453,11 @@ class CameraAIThread(threading.Thread):
                 elif detected_frame_label == "S": self.Counter_Safe += 1
                 elif detected_frame_label == "U": self.Counter_Unharmed += 1
             else:
-                if self.frame_counter > 0:
+                # Verwende last_detection_time als Bedingung, nicht frame_counter.
+                if self.last_detection_time > 0:
                     verstrichene_zeit = current_time - self.last_detection_time
+                    # Debug-Ausgabe zur Fehlersuche
+                    print(f"[{self.side_code}] Keine Erkennung. Zeit seit letzter Detektion: {verstrichene_zeit:.2f}s, frame_counter={self.frame_counter}")
                     if verstrichene_zeit > self.TIMEOUT_DURATION:
                         print(f"[{self.side_code}] Watchdog: Reset.")
                         self.reset_logic()
