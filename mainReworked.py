@@ -43,7 +43,8 @@ except ImportError:
 #LABEL_PATH = "labels.txt"
 MODEL_PATH = "trainedCog.tflite" 
 LABEL_PATH = "labelsCog.txt"
-MIN_CONFIDENCE = 0.6
+MIN_CONFIDENCE = 0.7
+MIN_CONFIDENCE_C = 0.5  # Lower threshold for cognitive target 'C'
 SERIAL_PORT = '/dev/ttyAMA0'    #Serialler Port zum Arduino
 BAUD_RATE = 115200
 
@@ -471,7 +472,7 @@ class CameraAIThread(threading.Thread):
                 best_class_id = np.argmax(scores)
                 confidence = scores[best_class_id]
 
-                if confidence > MIN_CONFIDENCE:
+                if confidence > MIN_CONFIDENCE_C:
                     label_str = LABELS.get(best_class_id)
                     if label_str and label_str.lower() != "background":
                         # Treat label C as cognitive target: show 'C', then evaluate color rings multiple times and
