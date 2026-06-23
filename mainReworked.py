@@ -39,10 +39,10 @@ except ImportError:
 # ==========================================
 # 2. KONFIGURATION
 # ==========================================
-#MODEL_PATH = "trainedEdgeClean.tflite" 
-#LABEL_PATH = "labels.txt"
-MODEL_PATH = "trainedCog.tflite" 
-LABEL_PATH = "labelsCog.txt"
+MODEL_PATH = "trainedEdgeClean.tflite" 
+LABEL_PATH = "labels.txt"
+#MODEL_PATH = "trainedCog.tflite" 
+#LABEL_PATH = "labelsCog.txt"
 MIN_CONFIDENCE = 0.7
 MIN_CONFIDENCE_C = 0.5  # Lower threshold for cognitive target 'C'
 SERIAL_PORT = '/dev/ttyAMA0'    #Serialler Port zum Arduino
