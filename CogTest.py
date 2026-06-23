@@ -85,40 +85,87 @@ def classify_color(hsv_pixel):
     elif 90 < h < 130: return "Blue"
     return "Unknown"
 
-def scan_target_colors(warped_image_bgr):
+def scan_target_colors(warped_image_bgr, debug=False):
     hsv_image = cv2.cvtColor(warped_image_bgr, cv2.COLOR_BGR2HSV)
     center = (100, 100)
     radii = [10, 30, 50, 70, 90]
     final_colors = []
 
+    samples_info = []  # list of lists: for each ring a list of (x,y,color)
+
     for r in radii:
         ring_colors = []
+        ring_info = []
         for angle_deg in range(0, 360, 30):
             angle_rad = math.radians(angle_deg)
             x = int(center[0] + r * math.cos(angle_rad))
             y = int(center[1] + r * math.sin(angle_rad))
-            
+
             x = max(0, min(199, x))
             y = max(0, min(199, y))
-            
+
             color_name = classify_color(hsv_image[y, x])
+            ring_info.append((x, y, color_name))
             if color_name != "White" and color_name != "Unknown":
                 ring_colors.append(color_name)
-        
+
         if ring_colors:
             most_common_color = Counter(ring_colors).most_common(1)[0][0]
             final_colors.append(most_common_color)
         else:
             final_colors.append("Unknown")
+
+        samples_info.append(ring_info)
+
+    if debug:
+        return final_colors, samples_info
     return final_colors
 
+
+def visualize_warped_sampling(warped_image_bgr, samples_info, final_colors=None):
+    vis = warped_image_bgr.copy()
+    # color mapping for visualization (BGR)
+    color_map = {
+        'Red': (0, 0, 255),
+        'Yellow': (0, 255, 255),
+        'Green': (0, 255, 0),
+        'Blue': (255, 0, 0),
+        'Black': (0, 0, 0),
+        'White': (255, 255, 255),
+        'Unknown': (180, 180, 180)
+    }
+
+    center = (100, 100)
+    # draw concentric reference circles
+    for r in [10, 30, 50, 70, 90]:
+        cv2.circle(vis, center, r, (200, 200, 200), 1)
+
+    # draw sample points and small labels
+    for ring_idx, ring in enumerate(samples_info):
+        for (x, y, color_name) in ring:
+            col = color_map.get(color_name, (0, 0, 0))
+            # filled circle with contrasting border
+            cv2.circle(vis, (x, y), 4, col, -1)
+            cv2.circle(vis, (x, y), 6, (50, 50, 50), 1)
+
+    # optionally write final detected ring colors
+    if final_colors is not None:
+        text = 'Rings: ' + ','.join(final_colors)
+        cv2.putText(vis, text, (5, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+
+    return vis
+
 def calculate_victim_health(colors):
+    """Return status (H/S/U/Fake) and an integer score based on detected ring colors."""
     color_values = {"Yellow": 0, "Blue": 2, "Red": -1, "Black": -2, "Green": 1}
     total_sum = sum(color_values.get(color, 0) for color in colors)
     status = "Fake"
-    if total_sum == 0: status = "U"   
-    elif total_sum == 1: status = "S" 
-    elif total_sum == 2: status = "H" 
+    if total_sum == 0:
+        status = "U"
+    elif total_sum == 1:
+        status = "S"
+    elif total_sum == 2:
+        status = "H"
     return status, total_sum
 
 # ==========================================
@@ -127,7 +174,7 @@ def calculate_victim_health(colors):
 def run_cognitive_test(picam2):
     print(f"\n--- Starte Cognitive Target Analyse ({SAMPLES} Samples) ---")
     votes = []
-    
+
     for i in range(SAMPLES):
         try:
             frame_rgb = picam2.capture_array()
@@ -142,22 +189,40 @@ def run_cognitive_test(picam2):
         corners = find_target_corners(frame_bgr)
         if corners is not None:
             warped = warp_target(frame_bgr, corners)
-            colors = scan_target_colors(warped)
+            # get debug info (points per sample)
+            colors, samples_info = scan_target_colors(warped, debug=True)
             status, score = calculate_victim_health(colors)
-            
+
+            # Visual debug: show detected box on original frame
+            debug_frame = frame_bgr.copy()
+            try:
+                pts = np.int32(corners).reshape((-1, 1, 2))
+                cv2.polylines(debug_frame, [pts], True, (0, 0, 255), 2)
+            except Exception:
+                pass
+
+            cv2.putText(debug_frame, f"Sample {i+1}: {status} ({score})", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.imshow("Detected Box", cv2.resize(debug_frame, (640, 480)))
+
             if status in ["H", "S", "U"]:
                 votes.append(status)
                 print(f" Sample {i+1}: Ring gefunden -> Status: {status} (Punkte: {score}) | Farben: {colors}")
-                
-                # Warped Image zur visuellen Kontrolle anzeigen
-                warped_large = cv2.resize(warped, (300, 300), interpolation=cv2.INTER_NEAREST)
+
+                # Warped Image zur visuellen Kontrolle anzeigen mit allen Sample-Punkten
+                warped_vis = visualize_warped_sampling(warped, samples_info, colors)
+                warped_large = cv2.resize(warped_vis, (400, 400), interpolation=cv2.INTER_NEAREST)
                 cv2.imshow("Cognitive Scan", warped_large)
-                cv2.waitKey(10)
+                # kurze Anzeige, damit Fenster aktualisiert bleibt
+                cv2.waitKey(100)
             else:
                 print(f" Sample {i+1}: Ring gefunden, aber ungueltiger Status ({status}) | Farben: {colors}")
+                warped_vis = visualize_warped_sampling(warped, samples_info, colors)
+                cv2.imshow("Cognitive Scan", cv2.resize(warped_vis, (400, 400)))
+                cv2.waitKey(100)
+
         else:
             print(f" Sample {i+1}: Kein Ring in den aktiven Zonen gefunden.")
-            
+
         time.sleep(DELAY_SEC)
 
     print("\n---------------- AUSWERTUNG ----------------")
@@ -169,6 +234,7 @@ def run_cognitive_test(picam2):
         print(" Fehler: Keine gueltigen Ringe in den Samples gefunden.")
     print("--------------------------------------------\n")
     cv2.destroyWindow("Cognitive Scan")
+    cv2.destroyWindow("Detected Box")
 
 
 # ==========================================
