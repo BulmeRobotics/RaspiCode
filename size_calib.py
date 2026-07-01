@@ -73,8 +73,8 @@ while True:
     max_ar = cv2.getTrackbarPos('Max AR (*10)', 'Size Calibration') / 10.0
     
     # 2. Sperrzonen definieren und einzeichnen
-    cutoff_top_y = int(frame_rgb.shape[0] * 0.25)
-    cutoff_bottom_y = int(frame_rgb.shape[0] * 0.875)
+    cutoff_top_y = int(frame_rgb.shape[0] * 0.125)
+    cutoff_bottom_y = int(frame_rgb.shape[0] * 0.9)
     cutoff_left_x = int(frame_rgb.shape[1] * (1/7))
     cutoff_right_x = int(frame_rgb.shape[1] * (6/7))
     
