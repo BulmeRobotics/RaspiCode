@@ -100,7 +100,7 @@ while True:
         x, y, w, h = cv2.boundingRect(c)
         if h == 0 or w == 0: continue 
         
-        # --- NEU: MITTELPUNKT BERECHNEN UND PRÜFEN ---
+        # --- MITTELPUNKT BERECHNEN UND PRÜFEN ---
         cx = x + (w // 2)
         cy = y + (h // 2)
         
@@ -117,18 +117,19 @@ while True:
         
         if is_valid_size:
             square_contours.append(c)
-            # Grüne Box für GÜLTIGE Objekte
+            # Grüne Box für GÜLTIGE Objekte - cY wird angezeigt
             cv2.rectangle(display_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            cv2.putText(display_frame, f"W:{w} H:{h}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            cv2.putText(display_frame, f"W:{w} H:{h} cY:{cy}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         else:
-            # Rote Box für UNGÜLTIGE Objekte (Mittelpunkt passt zwar, aber falsche Größe)
+            # Rote Box für UNGÜLTIGE Objekte - cY wird angezeigt
             cv2.rectangle(display_frame, (x, y), (x+w, y+h), (0, 0, 255), 1)
-            cv2.putText(display_frame, f"W:{w} H:{h}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            cv2.putText(display_frame, f"W:{w} H:{h} cY:{cy}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
     # 4. Den größten gültigen Kandidaten croppen und anzeigen
     if square_contours:
         largest_contour = max(square_contours, key=cv2.contourArea)
         x_b, y_b, w_b, h_b = cv2.boundingRect(largest_contour)
+        cy_b = y_b + (h_b // 2) # Y-Zentrum des Zielobjekts
         
         letter_crop = gray_frame[y_b:y_b+h_b, x_b:x_b+w_b]
         
@@ -149,7 +150,7 @@ while True:
         
         frame_counter += 1
         if frame_counter % 15 == 0:
-            print(f"✅ GÜLTIGES ZIEL GEFUNDEN | Breite: {w_b}px | Höhe: {h_b}px | Aspect Ratio: {(w_b/h_b):.2f}")
+            print(f"✅ ZIEL GEFUNDEN | B: {w_b}px | H: {h_b}px | cY (Höhe): {cy_b}px | Aspect Ratio: {(w_b/h_b):.2f}")
     else:
         blank = np.zeros((200, 200), dtype=np.uint8)
         cv2.putText(blank, "Kein Ziel", (40, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,), 2)
