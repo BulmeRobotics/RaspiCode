@@ -288,7 +288,7 @@ class CameraAIThread(threading.Thread):
         self.Counter_Harmed = self.Counter_Safe = self.Counter_Unharmed = 0
         self.frame_counter = 0
 
-    def evaluate_color_target(self, picam2, samples=7, delay=0.03):
+    def evaluate_color_target(self, picam2, samples=20, delay=0.03):
         votes = []
         for i in range(samples):
             try:
