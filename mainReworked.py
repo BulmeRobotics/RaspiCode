@@ -255,17 +255,17 @@ class CameraAIThread(threading.Thread):
         cutoff_right_x  = int(width * (6/7))
 
         # Default angled cutoff -> "R"
-        cutoff_left_auswurf_bottom  = [232, 478]    # Border Links Unten
-        cutoff_left_auswurf_top     = [0, 228]      # Border Links Oben
-        cutoff_right_auswurf_bottom = [346, 478]    # Border Rechts Unten
+        cutoff_left_auswurf_bottom  = [260, 478]    # Border Links Unten
+        cutoff_left_auswurf_top     = [0, 202]      # Border Links Oben
+        cutoff_right_auswurf_bottom = [320, 478]    # Border Rechts Unten
         cutoff_right_auswurf_top    = [636, 185]    # Border Rechts Oben
 
         # angled cutoff -> "L"
         if side == "L":
-            cutoff_left_auswurf_bottom  = [290, 478]    # Border Links Unten
-            cutoff_left_auswurf_top     = [0, 228]      # Border Links Oben
-            cutoff_right_auswurf_bottom = [393, 478]    # Border Rechts Unten
-            cutoff_right_auswurf_top    = [636, 237]    # Border Rechts Oben
+            cutoff_left_auswurf_bottom  = [300, 478]    # Border Links Unten
+            cutoff_left_auswurf_top     = [0, 193]      # Border Links Oben
+            cutoff_right_auswurf_bottom = [377, 478]    # Border Rechts Unten
+            cutoff_right_auswurf_top    = [636, 210]    # Border Rechts Oben
 
         return {
             'top_y': cutoff_top_y,
