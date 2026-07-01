@@ -2,7 +2,7 @@ import cv2
 import sys
 
 # Kamera ID (0 oder 1)
-CAM_ID = 0
+CAM_ID = 1
 
 def mouse_callback(event, x, y, flags, param):
     """
