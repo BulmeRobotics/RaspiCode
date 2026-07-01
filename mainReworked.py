@@ -214,7 +214,7 @@ def calculate_victim_health(colors):
     color_values = {"Yellow": 0, "Blue": 2, "Red": -1, "Black": -2, "Green": 1}
     total_sum = sum(color_values.get(color, 0) for color in colors)
         
-    status = "Fake"
+    status = "F"
     if total_sum == 0: status = "U"   
     elif total_sum == 1: status = "S" 
     elif total_sum == 2: status = "H" 
