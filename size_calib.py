@@ -49,7 +49,7 @@ except Exception as e:
 
 print("\n--- GRÖSSEN-KALIBRIERUNG GESTARTET ---")
 print("Passe die Schieberegler im Fenster an.")
-print("Grüne Box = Gültig (wird gecroppt)")
+print("Grüne Box = Gültig (Größe stimmt & MITTELPUNKT im Feld)")
 print("Rote Box = Ungültig (zu groß, zu klein, falsches Format)")
 print("Drücke 'q' zum Beenden.\n")
 
@@ -100,9 +100,13 @@ while True:
         x, y, w, h = cv2.boundingRect(c)
         if h == 0 or w == 0: continue 
         
-        # Ignoriere alles in den Sperrzonen (gar nicht erst einzeichnen)
-        if y < cutoff_top_y or (y + h) > cutoff_bottom_y: continue
-        if x < cutoff_left_x or (x + w) > cutoff_right_x: continue
+        # --- NEU: MITTELPUNKT BERECHNEN UND PRÜFEN ---
+        cx = x + (w // 2)
+        cy = y + (h // 2)
+        
+        # Ignoriere alles, dessen Mittelpunkt in den Sperrzonen liegt
+        if cy < cutoff_top_y or cy > cutoff_bottom_y: continue
+        if cx < cutoff_left_x or cx > cutoff_right_x: continue
         
         aspect_ratio = w / float(h)
         
@@ -117,7 +121,7 @@ while True:
             cv2.rectangle(display_frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
             cv2.putText(display_frame, f"W:{w} H:{h}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         else:
-            # Rote Box für UNGÜLTIGE Objekte (die zwar im Feld sind, aber die Größe/Ratio nicht passt)
+            # Rote Box für UNGÜLTIGE Objekte (Mittelpunkt passt zwar, aber falsche Größe)
             cv2.rectangle(display_frame, (x, y), (x+w, y+h), (0, 0, 255), 1)
             cv2.putText(display_frame, f"W:{w} H:{h}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
@@ -140,27 +144,22 @@ while True:
         padded_img = cv2.copyMakeBorder(letter_crop, pad_top, pad_bottom, pad_left, pad_right, 
                                         cv2.BORDER_CONSTANT, value=bg_color)
         
-        # Für die Anzeige vergrößern, damit man es gut sieht
         display_crop = cv2.resize(padded_img, (200, 200), interpolation=cv2.INTER_NEAREST)
         cv2.imshow("Crop Ansicht (Das sieht die KI)", display_crop)
         
-        # Terminal Info (gebremst auf 2x pro Sekunde, damit man mitlesen kann)
         frame_counter += 1
         if frame_counter % 15 == 0:
             print(f"✅ GÜLTIGES ZIEL GEFUNDEN | Breite: {w_b}px | Höhe: {h_b}px | Aspect Ratio: {(w_b/h_b):.2f}")
     else:
-        # Schwarzes Bild, falls nichts gültiges gefunden wurde
         blank = np.zeros((200, 200), dtype=np.uint8)
         cv2.putText(blank, "Kein Ziel", (40, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,), 2)
         cv2.imshow("Crop Ansicht (Das sieht die KI)", blank)
 
-    # UI Anzeigen
     cv2.imshow("Size Calibration", display_frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-# Aufräumen und Ergebnisse printen
 picam2.stop()
 cv2.destroyAllWindows()
 

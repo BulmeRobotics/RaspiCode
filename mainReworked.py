@@ -39,8 +39,6 @@ except ImportError:
 # ==========================================
 # 2. KONFIGURATION
 # ==========================================
-#MODEL_PATH = "trainedEdgeClean.tflite" 
-#LABEL_PATH = "labels.txt"
 MODEL_PATH = "trainedCog.tflite" 
 LABEL_PATH = "labelsCog.txt"
 MIN_CONFIDENCE = 0.7
@@ -54,8 +52,6 @@ ACTIVE_PIN_L = 27      # Status Pin Kamera L    CM5 GPIO27 -> Giga 29
 ACTIVE_PIN_R = 22      # Status Pin Kamera R    CM5 GPIO22 -> Giga 28
 
 # --- STREAM CONFIGURATION (Defines) ---
-# Schaltet die CV2-Fenster und zugehörigen Zeichenoperationen ein/aus.
-# Bei False gibt es keinerlei Performance-Einbußen, da die GUI-Logik übersprungen wird.
 SHOW_STREAM_L = False
 SHOW_STREAM_R = False
 
@@ -95,11 +91,9 @@ class SerialManager:
         """Liest den Puffer aus und extrahiert alle vollständigen <Befehle>."""
         commands = []
         if self.ser and self.ser.in_waiting > 0:
-            # Lese alle verfügbaren Bytes auf einmal (effizienter als einzeln)
             chars = self.ser.read(self.ser.in_waiting).decode('utf-8', errors='ignore')
             self.buffer += chars
             
-            # Extrahiere alle kompletten Befehle im Format <CMD>
             while "<" in self.buffer and ">" in self.buffer:
                 start = self.buffer.find("<")
                 end = self.buffer.find(">", start)
@@ -107,7 +101,6 @@ class SerialManager:
                 if start != -1 and end != -1:
                     cmd = self.buffer[start+1:end]
                     commands.append(cmd)
-                    # Puffer aktualisieren (alles nach dem aktuellen '>')
                     self.buffer = self.buffer[end+1:]
                 else:
                     break
@@ -144,8 +137,14 @@ def find_target_corners(image_bgr):
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
-        if y < cutoff_top_y or (y + h) > cutoff_bottom_y: continue
-        if x < cutoff_left_x or (x + w) > cutoff_right_x: continue
+        
+        # --- NEU: MITTELPUNKT BERECHNEN ---
+        cx = x + (w // 2)
+        cy = y + (h // 2)
+        
+        # Prüfen ob der MITTELPUNKT in der legalen Zone liegt
+        if cy < cutoff_top_y or cy > cutoff_bottom_y: continue
+        if cx < cutoff_left_x or cx > cutoff_right_x: continue
             
         area = cv2.contourArea(cnt)
         if area > 1000:
@@ -176,7 +175,6 @@ def warp_target(image_bgr, corners, output_size=200):
 def classify_color(hsv_pixel):
     h, s, v = hsv_pixel
     if v < 80: return "Black"
-    #if s < 50 and v > 200: return "White" 
     if h < 12 or h > 100: return "Red"
     elif 69 < h < 103: return "Yellow"
     elif 40 < h < 70: return "Green"
@@ -281,17 +279,14 @@ class CameraAIThread(threading.Thread):
     def reset_logic(self):
         self.Counter_Harmed = self.Counter_Safe = self.Counter_Unharmed = 0
         self.frame_counter = 0
-        #self.alert_active = False
 
     def evaluate_color_target(self, picam2, samples=7, delay=0.03):
-        """Capture a few frames and evaluate the color rings; return the most common H/S/U or None."""
         votes = []
         for i in range(samples):
             try:
                 sample_rgb = picam2.capture_array()
             except Exception:
                 continue
-            # rotate same as main loop
             sample_rgb = cv2.rotate(sample_rgb, cv2.ROTATE_180)
             sample_bgr = cv2.cvtColor(sample_rgb, cv2.COLOR_RGB2BGR)
 
@@ -326,10 +321,8 @@ class CameraAIThread(threading.Thread):
         last_fps_time = time.time()
 
         while self.running:
-            # current time used for debounce and other timing
             current_time = time.time()
 
-            # --- ToF Debounce: require stable state for TOF_DEBOUNCE seconds ---
             if tof:
                 try:
                     raw = (tof.state[self.side_code] != 0)
@@ -342,26 +335,18 @@ class CameraAIThread(threading.Thread):
                 self._tof_last_raw = raw
                 self._tof_last_change = current_time
 
-            # detect changes and timestamp
             if raw != self._tof_last_raw:
                 self._tof_last_raw = raw
                 self._tof_last_change = current_time
 
-            # Asymmetric debounce:
-            # - If raw == False (wall lost) -> update filtered state immediately
-            # - If raw == True (wall present)  -> wait TOF_DEBOUNCE seconds of stability
             if not raw and self.tof_filtered:
-                # immediate loss
                 self.tof_filtered = False
             elif raw and not self.tof_filtered:
-                # require stable presence for debounce interval
                 if (current_time - self._tof_last_change) >= self.TOF_DEBOUNCE:
                     self.tof_filtered = True
 
             if self.waiting_for_reset:
                 self.status_pin.on()
-                # Keep alert_active True so the global alert pin remains active
-                # until the Arduino sends <D> to reset the camera.
                 time.sleep(0.1)
                 continue
 
@@ -371,10 +356,8 @@ class CameraAIThread(threading.Thread):
                 time.sleep(0.1)
                 continue
 
-            # Use filtered ToF value
             if tof and not self.tof_filtered:
                 self.status_pin.off()
-                # If this camera loses the wall, clear its alert so it doesn't keep the global trigger active.
                 self.alert_active = False
                 if self.frame_counter > 0:
                     self.reset_logic()
@@ -389,7 +372,6 @@ class CameraAIThread(threading.Thread):
             
             if current_time - last_fps_time > 1.0:
                 self.fps = frame_count / (current_time - last_fps_time)
-                #print(f"[{self.side_code}] FPS: {self.fps:.1f}")
                 frame_count = 0
                 last_fps_time = current_time
 
@@ -401,7 +383,6 @@ class CameraAIThread(threading.Thread):
             cutoff_left_x = int(frame_rgb.shape[1] * (1/7))
             cutoff_right_x = int(frame_rgb.shape[1] * (6/7))
             
-            # --- GUI Vorbereitung (Nur wenn Stream aktiv) ---
             display_frame = None
             if self.show_stream:
                 display_frame = frame_bgr.copy()
@@ -430,8 +411,14 @@ class CameraAIThread(threading.Thread):
                 x_tmp, y_tmp, w_tmp, h_tmp = cv2.boundingRect(c)
                 if h_tmp == 0: continue 
                 
-                if y_tmp < cutoff_top_y or (y_tmp + h_tmp) > cutoff_bottom_y: continue
-                if x_tmp < cutoff_left_x or (x_tmp + w_tmp) > cutoff_right_x: continue
+                # --- NEU: MITTELPUNKT BERECHNEN ---
+                cx_tmp = x_tmp + (w_tmp // 2)
+                cy_tmp = y_tmp + (h_tmp // 2)
+                
+                # Wenn der MITTELPUNKT draußen liegt, ignorieren!
+                if cy_tmp < cutoff_top_y or cy_tmp > cutoff_bottom_y: continue
+                if cx_tmp < cutoff_left_x or cx_tmp > cutoff_right_x: continue
+                
                 if w_tmp < 60 or h_tmp < 60 or w_tmp > 360 or h_tmp > 360: continue
                 
                 aspect_ratio = w_tmp / float(h_tmp)
@@ -482,23 +469,17 @@ class CameraAIThread(threading.Thread):
                 if confidence > MIN_CONFIDENCE_C:
                     label_str = LABELS.get(best_class_id)
                     if label_str and label_str.lower() != "background":
-                        # Treat label C as cognitive target: show 'C', then evaluate color rings multiple times and
-                        # immediately transmit the most common H/S/U result and enter waiting state.
                         if label_str.upper() == 'C':
                             detected_frame_label = 'C'
-                            # Print confidence for C
                             print(f"[{self.side_code}] Kognitives Ziel erkannt (C). Confidence: {confidence:.3f}. Starte Farbauswertung...")
                             color_result = self.evaluate_color_target(picam2, samples=3, delay=0.03)
                             if color_result:
-                                # sofort senden und warten auf Reset
                                 self.serial_mgr.write(color_result, self.side_code)
                                 print(f"[{self.side_code}] Farbauswertung Ergebnis: {color_result} - gesendet. Warte auf <D>.")
-                                # setze Flags entsprechend
                                 self.reset_logic()
                                 self.enabled = False
                                 self.waiting_for_reset = True
                                 self.alert_active = True
-                                # skip further processing this frame
                                 continue
                             else:
                                 print(f"[{self.side_code}] Farbauswertung lieferte kein Ergebnis.")
@@ -515,7 +496,7 @@ class CameraAIThread(threading.Thread):
                     if circle_status in ["H", "S", "U"]:
                         detected_frame_label = circle_status
 
-            # --- GUI DARSTELLUNG (Nur wenn Stream aktiv) ---
+            # --- GUI DARSTELLUNG ---
             if self.show_stream:
                 if detected_frame_label:
                     color = (0, 255, 0)
@@ -543,16 +524,11 @@ class CameraAIThread(threading.Thread):
                 elif detected_frame_label == "S": self.Counter_Safe += 1
                 elif detected_frame_label == "U": self.Counter_Unharmed += 1
             else:
-                # Verwende last_detection_time als Bedingung, nicht frame_counter.
                 if self.last_detection_time > 0:
                     verstrichene_zeit = current_time - self.last_detection_time
-                    # Debug-Ausgabe zur Fehlersuche
-                    #print(f"[{self.side_code}] Keine Erkennung. Zeit seit letzter Detektion: {verstrichene_zeit:.2f}s, frame_counter={self.frame_counter}")
                     if verstrichene_zeit > self.TIMEOUT_DURATION:
-                        #print(f"[{self.side_code}] Watchdog: Reset.")
                         self.reset_logic()
                         self.alert_active = False
-                        #print(f"[{self.side_code}] Alert Pin Low")
 
             # --- ERGEBNIS ÜBERTRAGEN ---
             if self.frame_counter >= 10:
@@ -578,10 +554,8 @@ if tof:
     print("Starte TOF Sensoren...")
     tof.start()
 
-# Serial Instanz erstellen
 serial_mgr = SerialManager(SERIAL_PORT, BAUD_RATE)
 
-# Threads mit Stream-Defines und SerialManager initialisieren
 cam_right = CameraAIThread(0, "R", ACTIVE_PIN_R, serial_mgr, show_stream=SHOW_STREAM_R)
 cam_left = CameraAIThread(1, "L", ACTIVE_PIN_L, serial_mgr, show_stream=SHOW_STREAM_L)
 
@@ -592,21 +566,17 @@ print("Warte auf Befehle vom Arduino...")
 
 try:
     while True:
-        # Puffer sauber auslesen
         commands = serial_mgr.read_commands()
-        
         for cmd in commands:
             print("Arduino Command: ", cmd)
             
             if cmd == "I":
                 serial_mgr.write("OK")
-            
             elif cmd == "E":
                 cam_left.enabled = True
                 cam_right.enabled = True
                 serial_mgr.write("OK")
                 print("Enabled")
-            
             elif cmd == "D":
                 cam_left.enabled = False
                 cam_left.waiting_for_reset = False
@@ -620,8 +590,6 @@ try:
                 serial_mgr.write("OK")
                 print("Disabled")
 
-        # --- GLOBAL ALERT / TRIGGER-LOGIK ---
-        # Entscheide ob der globale Trigger-Output gesetzt werden soll.
         def cam_has_wall(cam):
             try:
                 return getattr(cam, 'tof_filtered', True)
@@ -633,12 +601,9 @@ try:
 
         if left_valid or right_valid:
             output_pin.on()
-            #print("Alert Pin High")
         else:
             output_pin.off()
-            #print("Alert Pin Low")
 
-        # Auto-reset: falls seit letzter echten Detektion >3s und kein neuer Alarm, reset
         last_det = max(cam_left.last_detection_time, cam_right.last_detection_time)
         if last_det > 0 and (time.time() - last_det) > 3.0:
             if cam_left.alert_active or cam_right.alert_active:
