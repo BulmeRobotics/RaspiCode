@@ -242,7 +242,7 @@ class CameraAIThread(threading.Thread):
         self.frame_counter = 0
         self.last_detection_time = 0.0
 
-    def is_in_boundary(self, cx, cy, img_shape, side=None):
+    def get_boundary_coords(self, img_shape, side=None):
         if side is None:
             side = self.side_code
             
@@ -253,38 +253,53 @@ class CameraAIThread(threading.Thread):
             
         cutoff_left_x   = int(width * (1/7))
         cutoff_right_x  = int(width * (6/7))
-        
-        # Check simple rectangular bounds
-        if cy < cutoff_top_y or cy > cutoff_bottom_y:
-            return False
-        if cx < cutoff_left_x or cx > cutoff_right_x:
-            return False
 
-        # Angled cutoffs    wx = 636; wh = 478
-
-        #angled cutoff -> "R"
+        # Default angled cutoff -> "R"
         cutoff_left_auswurf_bottom  = [232, 478]    # Border Links Unten
         cutoff_left_auswurf_top     = [0, 228]      # Border Links Oben
         cutoff_right_auswurf_bottom = [346, 478]    # Border Rechts Unten
         cutoff_right_auswurf_top    = [636, 185]    # Border Rechts Oben
 
-        #angled cutoff -> "L"
-        if(side == "L"):
+        # angled cutoff -> "L"
+        if side == "L":
             cutoff_left_auswurf_bottom  = [290, 478]    # Border Links Unten
             cutoff_left_auswurf_top     = [0, 228]      # Border Links Oben
             cutoff_right_auswurf_bottom = [404, 478]    # Border Rechts Unten
             cutoff_right_auswurf_top    = [636, 185]    # Border Rechts Oben
 
+        return {
+            'top_y': cutoff_top_y,
+            'bottom_y': cutoff_bottom_y,
+            'left_x': cutoff_left_x,
+            'right_x': cutoff_right_x,
+            'left_auswurf_bottom': cutoff_left_auswurf_bottom,
+            'left_auswurf_top': cutoff_left_auswurf_top,
+            'right_auswurf_bottom': cutoff_right_auswurf_bottom,
+            'right_auswurf_top': cutoff_right_auswurf_top,
+        }
+
+    def is_in_boundary(self, cx, cy, img_shape, side=None):
+        coords = self.get_boundary_coords(img_shape, side)
         
+        # Check simple rectangular bounds
+        if cy < coords['top_y'] or cy > coords['bottom_y']:
+            return False
+        if cx < coords['left_x'] or cx > coords['right_x']:
+            return False
+
         # check für links
-        if (cy > cutoff_left_auswurf_top[1] and cx < cutoff_left_auswurf_bottom[0]):
-            lineY = cutoff_left_auswurf_top[1] + (cx - cutoff_left_auswurf_top[0]) * ((cutoff_left_auswurf_bottom[1]-cutoff_left_auswurf_top[1])/((cutoff_left_auswurf_bottom[0]-cutoff_left_auswurf_top[0])))
+        left_top = coords['left_auswurf_top']
+        left_bottom = coords['left_auswurf_bottom']
+        if (cy > left_top[1] and cx < left_bottom[0]):
+            lineY = left_top[1] + (cx - left_top[0]) * ((left_bottom[1]-left_top[1])/((left_bottom[0]-left_top[0])))
             if (lineY < cy):
                 return False
 
         # check für rechts
-        if (cx > cutoff_right_auswurf_bottom[0] and cy > cutoff_right_auswurf_top[1]):
-            lineY = cutoff_right_auswurf_top[1] + (cx - cutoff_right_auswurf_top[0]) * ((cutoff_right_auswurf_bottom[1]-cutoff_right_auswurf_top[1])/((cutoff_right_auswurf_bottom[0]-cutoff_right_auswurf_top[0])))
+        right_top = coords['right_auswurf_top']
+        right_bottom = coords['right_auswurf_bottom']
+        if (cx > right_bottom[0] and cy > right_top[1]):
+            lineY = right_top[1] + (cx - right_top[0]) * ((right_bottom[1]-right_top[1])/((right_bottom[0]-right_top[0])))
             if (lineY < cy):
                 return False
                         
@@ -425,20 +440,28 @@ class CameraAIThread(threading.Thread):
 
             frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            #
-            cutoff_top_y = int(frame_rgb.shape[0] * 0.125)
-            cutoff_bottom_y = int(frame_rgb.shape[0] * 0.75)
-            cutoff_left_x = int(frame_rgb.shape[1] * (1/7))
-            cutoff_right_x = int(frame_rgb.shape[1] * (6/7))
+            coords = self.get_boundary_coords(frame_bgr.shape, self.side_code)
+            cutoff_top_y = coords['top_y']
             
             display_frame = None
             if self.show_stream:
                 display_frame = frame_bgr.copy()
-                cv2.line(display_frame, (0, cutoff_top_y), (frame_bgr.shape[1], cutoff_top_y), (0, 255, 255), 2)
-                cv2.line(display_frame, (0, cutoff_bottom_y), (frame_bgr.shape[1], cutoff_bottom_y), (0, 255, 255), 2)
-                cv2.line(display_frame, (cutoff_left_x, 0), (cutoff_left_x, frame_bgr.shape[0]), (0, 255, 255), 2)
-                cv2.line(display_frame, (cutoff_right_x, 0), (cutoff_right_x, frame_bgr.shape[0]), (0, 255, 255), 2)
                 
+                # Draw rectangular boundary from get_boundary_coords in red (0, 0, 255)
+                cv2.line(display_frame, (0, coords['top_y']), (frame_bgr.shape[1], coords['top_y']), (0, 0, 255), 2)
+                cv2.line(display_frame, (0, coords['bottom_y']), (frame_bgr.shape[1], coords['bottom_y']), (0, 0, 255), 2)
+                cv2.line(display_frame, (coords['left_x'], 0), (coords['left_x'], frame_bgr.shape[0]), (0, 0, 255), 2)
+                cv2.line(display_frame, (coords['right_x'], 0), (coords['right_x'], frame_bgr.shape[0]), (0, 0, 255), 2)
+                
+                # Draw angled cutoffs
+                ang_left_bottom = tuple(coords['left_auswurf_bottom'])
+                ang_left_top = tuple(coords['left_auswurf_top'])
+                ang_right_bottom = tuple(coords['right_auswurf_bottom'])
+                ang_right_top = tuple(coords['right_auswurf_top'])
+                
+                cv2.line(display_frame, ang_left_top, ang_left_bottom, (0, 0, 255), 2)
+                cv2.line(display_frame, ang_right_top, ang_right_bottom, (0, 0, 255), 2)
+
 
             detected_frame_label = None
             box_coords = None
