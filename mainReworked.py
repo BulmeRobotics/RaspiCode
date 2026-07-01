@@ -264,8 +264,8 @@ class CameraAIThread(threading.Thread):
         if side == "L":
             cutoff_left_auswurf_bottom  = [290, 478]    # Border Links Unten
             cutoff_left_auswurf_top     = [0, 228]      # Border Links Oben
-            cutoff_right_auswurf_bottom = [404, 478]    # Border Rechts Unten
-            cutoff_right_auswurf_top    = [636, 185]    # Border Rechts Oben
+            cutoff_right_auswurf_bottom = [393, 478]    # Border Rechts Unten
+            cutoff_right_auswurf_top    = [636, 237]    # Border Rechts Oben
 
         return {
             'top_y': cutoff_top_y,
