@@ -78,13 +78,21 @@ while True:
     cutoff_left_x = int(frame_rgb.shape[1] * (1/7))
     cutoff_right_x = int(frame_rgb.shape[1] * (6/7))
    
+    cutoff_left_auswurf_bottom_x = (232)        #Boarder Links Unten X
+    cutoff_left_auswurf_bottom_y = (478)        #Boarder Links Unten Y
+    cutoff_left_auswurf_top_x = (0)             #Boarder Links Oben X
+    cutoff_left_auswurf_top_y = (228)           #Boarder Links Oben Y
+    cutoff_right_auswurf_bottom_x = (346)       #Boarder Rechts Unten X
+    cutoff_right_auswurf_bottom_y = (476)       #Boarder Rechts Unten Y
+    cutoff_right_auswurf_top_x = (636)          #Boarder Rechts Oben X
+    cutoff_right_auswurf_top_y = (185)          #Boarder Rechts Oben Y
 
     cv2.line(display_frame, (0, cutoff_top_y), (display_frame.shape[1], cutoff_top_y), (0, 255, 255), 2)
     cv2.line(display_frame, (0, cutoff_bottom_y), (display_frame.shape[1], cutoff_bottom_y), (0, 255, 255), 2)
     cv2.line(display_frame, (cutoff_left_x, 0), (cutoff_left_x, display_frame.shape[0]), (0, 255, 255), 2)
     cv2.line(display_frame, (cutoff_right_x, 0), (cutoff_right_x, display_frame.shape[0]), (0, 255, 255), 2)
 
-    
+
 
     # 3. Bildverarbeitung wie im Hauptcode
     gray_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
@@ -111,6 +119,11 @@ while True:
         if cy < cutoff_top_y or cy > cutoff_bottom_y: continue
         if cx < cutoff_left_x or cx > cutoff_right_x: continue
         
+        if (cutoff_left_auswurf_top_x < cx < cutoff_left_auswurf_bottom_x and
+            cutoff_left_auswurf_top_y < cy < cutoff_left_auswurf_bottom_y):continue
+            
+        if (cutoff_right_auswurf_top_x < cx < cutoff_right_auswurf_bottom_x and
+            cutoff_right_auswurf_top_y < cy < cutoff_right_auswurf_bottom_y):continue
         aspect_ratio = w / float(h)
         
         # GRÖSSEN- UND FORMAT-CHECK (gegen die Trackbars)
