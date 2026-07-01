@@ -377,7 +377,7 @@ class CameraAIThread(threading.Thread):
 
             frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            
+            #
             cutoff_top_y = int(frame_rgb.shape[0] * 0.125)
             cutoff_bottom_y = int(frame_rgb.shape[0] * 0.9375)
             cutoff_left_x = int(frame_rgb.shape[1] * (1/7))
