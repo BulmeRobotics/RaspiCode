@@ -12,7 +12,7 @@ except ImportError:
 # ==========================================
 # KONFIGURATION
 # ==========================================
-CAM_ID = 0  # 0 für Links, 1 für Rechts
+CAM_ID = 1  # 0 für Links, 1 für Rechts
 
 def nothing(x):
     pass
