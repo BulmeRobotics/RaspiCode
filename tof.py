@@ -9,16 +9,22 @@ try:
     import board
     import busio
     import adafruit_vl53l0x
-except ImportError:
+except ImportError as e:
     print("Fehler: Adafruit-Bibliotheken fehlen.")
     print("  pip install adafruit-blinka adafruit-circuitpython-vl53l0x --break-system-packages")
-    sys.exit(1)
+    if __name__ == "__main__":
+        sys.exit(1)
+    else:
+        raise e
 
 try:
     from gpiozero import DigitalOutputDevice
-except ImportError:
+except ImportError as e:
     print("Fehler: gpiozero fehlt (nur auf dem Raspberry Pi verfuegbar).")
-    sys.exit(1)
+    if __name__ == "__main__":
+        sys.exit(1)
+    else:
+        raise e
 
 # ==========================================
 # 2. KONFIGURATION

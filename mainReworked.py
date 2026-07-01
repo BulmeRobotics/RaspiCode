@@ -120,67 +120,7 @@ def order_points(pts):
     rect[3] = pts[np.argmax(diff)]
     return rect
 
-def find_target_corners(image_bgr):
-    cutoff_top_y = int(image_bgr.shape[0] * 0.25)
-    cutoff_bottom_y = int(image_bgr.shape[0] * 0.9375)
-    cutoff_left_x = int(image_bgr.shape[1] * (1/7))
-    cutoff_right_x = int(image_bgr.shape[1] * (6/7))
-    
-        # x, y
-    #Cutoff Left angled
-    cutoff_left_auswurf_bottom = [232, 478]        #Border Links Unten
-    cutoff_left_auswurf_top = [0, 228]          #Border Links Oben
 
-    #Cutoff Right angled
-    cutoff_right_auswurf_bottom = [346, 476]       #Border Rechts Unten
-    cutoff_right_auswurf_top= [636, 185]          #Border Rechts Oben
-
-    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blurred, 50, 150)
-
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        
-        # --- NEU: MITTELPUNKT BERECHNEN ---
-        cx = x + (w // 2)
-        cy = y + (h // 2)
-        
-        # Prüfen ob der MITTELPUNKT in der legalen Zone liegt
-        if cy < cutoff_top_y or cy > cutoff_bottom_y: continue
-        if cx < cutoff_left_x or cx > cutoff_right_x: continue
-
-        # y = kx + d -> k = dy / dx
-
-        #check für links
-        if(cy > cutoff_left_auswurf_top[1] and cx < cutoff_left_auswurf_bottom[0]):
-            lineY = cutoff_left_auswurf_top[1] + (cx - cutoff_left_auswurf_top[0]) * ((cutoff_left_auswurf_bottom[1]-cutoff_left_auswurf_top[1])/((cutoff_left_auswurf_bottom[0]-cutoff_left_auswurf_top[0])))
-            if (lineY < cy): continue
-
-        if(cx > cutoff_right_auswurf_bottom[0] and cy > cutoff_right_auswurf_top[1]):
-            lineY = cutoff_right_auswurf_top[1] + (cx - cutoff_right_auswurf_top[0]) * ((cutoff_right_auswurf_bottom[1]-cutoff_right_auswurf_top[1])/((cutoff_right_auswurf_bottom[0]-cutoff_right_auswurf_top[0])))
-            if(lineY < cy): continue
-
-
-        area = cv2.contourArea(cnt)
-        if area > 1000:
-            rect = cv2.minAreaRect(cnt)
-            box = cv2.boxPoints(rect)
-            box = np.int32(box) 
-            
-            width = rect[1][0]
-            height = rect[1][1]
-            if height == 0: continue
-            aspect_ratio = width / height
-            
-            if 0.7 <= aspect_ratio <= 1.3:
-                return order_points(box)
-    return None
 
 def warp_target(image_bgr, corners, output_size=200):
     dst_points = np.array([
@@ -300,6 +240,93 @@ class CameraAIThread(threading.Thread):
     def reset_logic(self):
         self.Counter_Harmed = self.Counter_Safe = self.Counter_Unharmed = 0
         self.frame_counter = 0
+        self.last_detection_time = 0.0
+
+    def is_in_boundary(self, cx, cy, img_shape, side=None):
+        if side is None:
+            side = self.side_code
+            
+        height, width = img_shape[:2]
+    
+        cutoff_top_y    = int(height * 0.25)
+        cutoff_bottom_y = int(height * 0.9375)
+            
+        cutoff_left_x   = int(width * (1/7))
+        cutoff_right_x  = int(width * (6/7))
+        
+        # Check simple rectangular bounds
+        if cy < cutoff_top_y or cy > cutoff_bottom_y:
+            return False
+        if cx < cutoff_left_x or cx > cutoff_right_x:
+            return False
+
+        # Angled cutoffs    wx = 636; wh = 478
+
+        #angled cutoff -> "R"
+        cutoff_left_auswurf_bottom  = [232, 478]    # Border Links Unten
+        cutoff_left_auswurf_top     = [0, 228]      # Border Links Oben
+        cutoff_right_auswurf_bottom = [346, 478]    # Border Rechts Unten
+        cutoff_right_auswurf_top    = [636, 185]    # Border Rechts Oben
+
+        #angled cutoff -> "L"
+        if(side == "L"):
+            cutoff_left_auswurf_bottom  = [290, 478]    # Border Links Unten
+            cutoff_left_auswurf_top     = [0, 228]      # Border Links Oben
+            cutoff_right_auswurf_bottom = [404, 478]    # Border Rechts Unten
+            cutoff_right_auswurf_top    = [636, 185]    # Border Rechts Oben
+
+        
+        # check für links
+        if (cy > cutoff_left_auswurf_top[1] and cx < cutoff_left_auswurf_bottom[0]):
+            lineY = cutoff_left_auswurf_top[1] + (cx - cutoff_left_auswurf_top[0]) * ((cutoff_left_auswurf_bottom[1]-cutoff_left_auswurf_top[1])/((cutoff_left_auswurf_bottom[0]-cutoff_left_auswurf_top[0])))
+            if (lineY < cy):
+                return False
+
+        # check für rechts
+        if (cx > cutoff_right_auswurf_bottom[0] and cy > cutoff_right_auswurf_top[1]):
+            lineY = cutoff_right_auswurf_top[1] + (cx - cutoff_right_auswurf_top[0]) * ((cutoff_right_auswurf_bottom[1]-cutoff_right_auswurf_top[1])/((cutoff_right_auswurf_bottom[0]-cutoff_right_auswurf_top[0])))
+            if (lineY < cy):
+                return False
+                        
+        return True
+
+    def find_target_corners(self, image_bgr, side=None):
+        if side is None:
+            side = self.side_code
+            
+        gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 50, 150)
+
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            
+            cx = x + (w // 2)
+            cy = y + (h // 2)
+            
+            # Prüfen ob der MITTELPUNKT in der legalen Zone liegt
+            if not self.is_in_boundary(cx, cy, image_bgr.shape, side=side):
+                continue
+
+            area = cv2.contourArea(cnt)
+            if area > 1000:
+                rect = cv2.minAreaRect(cnt)
+                box = cv2.boxPoints(rect)
+                box = np.int32(box) 
+                
+                width = rect[1][0]
+                height = rect[1][1]
+                if height == 0: continue
+                aspect_ratio = width / height
+                
+                if 0.7 <= aspect_ratio <= 1.3:
+                    return order_points(box)
+        return None
 
     def evaluate_color_target(self, picam2, samples=20, delay=0.03):
         votes = []
@@ -311,7 +338,7 @@ class CameraAIThread(threading.Thread):
             sample_rgb = cv2.rotate(sample_rgb, cv2.ROTATE_180)
             sample_bgr = cv2.cvtColor(sample_rgb, cv2.COLOR_RGB2BGR)
 
-            detected_corners = find_target_corners(sample_bgr)
+            detected_corners = self.find_target_corners(sample_bgr, self.side_code)
             if detected_corners is not None:
                 warped = warp_target(sample_bgr, detected_corners)
                 colors = scan_target_colors(warped)
@@ -411,6 +438,7 @@ class CameraAIThread(threading.Thread):
                 cv2.line(display_frame, (0, cutoff_bottom_y), (frame_bgr.shape[1], cutoff_bottom_y), (0, 255, 255), 2)
                 cv2.line(display_frame, (cutoff_left_x, 0), (cutoff_left_x, frame_bgr.shape[0]), (0, 255, 255), 2)
                 cv2.line(display_frame, (cutoff_right_x, 0), (cutoff_right_x, frame_bgr.shape[0]), (0, 255, 255), 2)
+                
 
             detected_frame_label = None
             box_coords = None
@@ -437,8 +465,8 @@ class CameraAIThread(threading.Thread):
                 cy_tmp = y_tmp + (h_tmp // 2)
                 
                 # Wenn der MITTELPUNKT draußen liegt, ignorieren!
-                if cy_tmp < cutoff_top_y or cy_tmp > cutoff_bottom_y: continue
-                if cx_tmp < cutoff_left_x or cx_tmp > cutoff_right_x: continue
+                if not self.is_in_boundary(cx_tmp, cy_tmp, gray_frame.shape, self.side_code):
+                    continue
                 
                 if w_tmp < 60 or h_tmp < 60 or w_tmp > 360 or h_tmp > 360: continue
                 
@@ -509,7 +537,7 @@ class CameraAIThread(threading.Thread):
 
             # --- ERKENNUNG 2: Farbringe ---
             if not detected_frame_label:
-                detected_corners = find_target_corners(frame_bgr)
+                detected_corners = self.find_target_corners(frame_bgr, self.side_code)
                 if detected_corners is not None:
                     warped = warp_target(frame_bgr, detected_corners)
                     colors = scan_target_colors(warped)
@@ -585,6 +613,12 @@ cam_right.start()
 
 print("Warte auf Befehle vom Arduino...")
 
+def cam_has_wall(cam):
+    try:
+        return getattr(cam, 'tof_filtered', True)
+    except Exception:
+        return True
+
 try:
     while True:
         commands = serial_mgr.read_commands()
@@ -610,12 +644,6 @@ try:
                 cam_right.alert_active = False
                 serial_mgr.write("OK")
                 print("Disabled")
-
-        def cam_has_wall(cam):
-            try:
-                return getattr(cam, 'tof_filtered', True)
-            except Exception:
-                return True
 
         left_valid = cam_left.alert_active and cam_has_wall(cam_left)
         right_valid = cam_right.alert_active and cam_has_wall(cam_right)
