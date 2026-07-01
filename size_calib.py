@@ -77,11 +77,14 @@ while True:
     cutoff_bottom_y = int(frame_rgb.shape[0] * 0.9)
     cutoff_left_x = int(frame_rgb.shape[1] * (1/7))
     cutoff_right_x = int(frame_rgb.shape[1] * (6/7))
-    
+   
+
     cv2.line(display_frame, (0, cutoff_top_y), (display_frame.shape[1], cutoff_top_y), (0, 255, 255), 2)
     cv2.line(display_frame, (0, cutoff_bottom_y), (display_frame.shape[1], cutoff_bottom_y), (0, 255, 255), 2)
     cv2.line(display_frame, (cutoff_left_x, 0), (cutoff_left_x, display_frame.shape[0]), (0, 255, 255), 2)
     cv2.line(display_frame, (cutoff_right_x, 0), (cutoff_right_x, display_frame.shape[0]), (0, 255, 255), 2)
+
+    
 
     # 3. Bildverarbeitung wie im Hauptcode
     gray_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
