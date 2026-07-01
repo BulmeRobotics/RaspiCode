@@ -154,13 +154,6 @@ def find_target_corners(image_bgr):
         if cy < cutoff_top_y or cy > cutoff_bottom_y: continue
         if cx < cutoff_left_x or cx > cutoff_right_x: continue
 
-        if (cutoff_left_auswurf_top_x < cx < cutoff_left_auswurf_bottom_x and
-            cutoff_left_auswurf_top_y < cy < cutoff_left_auswurf_bottom_y):continue
-            
-        if (cutoff_right_auswurf_top_x < cx < cutoff_right_auswurf_bottom_x and
-            cutoff_right_auswurf_top_y < cy < cutoff_right_auswurf_bottom_y):continue
-            
-
         area = cv2.contourArea(cnt)
         if area > 1000:
             rect = cv2.minAreaRect(cnt)
