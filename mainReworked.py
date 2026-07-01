@@ -121,7 +121,7 @@ def order_points(pts):
     return rect
 
 def find_target_corners(image_bgr):
-    cutoff_top_y = int(image_bgr.shape[0] * 0.125)
+    cutoff_top_y = int(image_bgr.shape[0] * 0.25)
     cutoff_bottom_y = int(image_bgr.shape[0] * 0.9375)
     cutoff_left_x = int(image_bgr.shape[1] * (1/7))
     cutoff_right_x = int(image_bgr.shape[1] * (6/7))
