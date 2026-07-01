@@ -125,14 +125,15 @@ def find_target_corners(image_bgr):
     cutoff_bottom_y = int(image_bgr.shape[0] * 0.9375)
     cutoff_left_x = int(image_bgr.shape[1] * (1/7))
     cutoff_right_x = int(image_bgr.shape[1] * (6/7))
-    cutoff_left_auswurf_bottom_x = (232)        #Boarder Links Unten X
-    cutoff_left_auswurf_bottom_y = (478)        #Boarder Links Unten Y
-    cutoff_left_auswurf_top_x = (0)             #Boarder Links Oben X
-    cutoff_left_auswurf_top_y = (228)           #Boarder Links Oben Y
-    cutoff_right_auswurf_bottom_x = (346)       #Boarder Rechts Unten X
-    cutoff_right_auswurf_bottom_y = (476)       #Boarder Rechts Unten Y
-    cutoff_right_auswurf_top_x = (636)          #Boarder Rechts Oben X
-    cutoff_right_auswurf_top_y = (185)          #Boarder Rechts Oben Y
+    
+        # x, y
+    #Cutoff Left angled
+    cutoff_left_auswurf_bottom = [232, 478]        #Border Links Unten
+    cutoff_left_auswurf_top = [0, 228]          #Border Links Oben
+
+    #Cutoff Right angled
+    cutoff_right_auswurf_bottom = [346, 476]       #Border Rechts Unten
+    cutoff_right_auswurf_top= [636, 185]          #Border Rechts Oben
 
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -153,6 +154,18 @@ def find_target_corners(image_bgr):
         # Prüfen ob der MITTELPUNKT in der legalen Zone liegt
         if cy < cutoff_top_y or cy > cutoff_bottom_y: continue
         if cx < cutoff_left_x or cx > cutoff_right_x: continue
+
+        # y = kx + d -> k = dy / dx
+
+        #check für links
+        if(cy > cutoff_left_auswurf_top[1] and cx < cutoff_left_auswurf_bottom[0]):
+            lineY = cutoff_left_auswurf_top[1] + (cx - cutoff_left_auswurf_top[0]) * ((cutoff_left_auswurf_bottom[1]-cutoff_left_auswurf_top[1])/((cutoff_left_auswurf_bottom[0]-cutoff_left_auswurf_top[0])))
+            if (lineY < cy): continue
+
+        if(cx > cutoff_right_auswurf_bottom[0] and cy > cutoff_right_auswurf_top[1]):
+            lineY = cutoff_right_auswurf_top[1] + (cx - cutoff_right_auswurf_top[0]) * ((cutoff_right_auswurf_bottom[1]-cutoff_right_auswurf_top[1])/((cutoff_right_auswurf_bottom[0]-cutoff_right_auswurf_top[0])))
+            if(lineY < cy): continue
+
 
         area = cv2.contourArea(cnt)
         if area > 1000:
