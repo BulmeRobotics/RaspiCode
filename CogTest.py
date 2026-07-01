@@ -48,8 +48,14 @@ def find_target_corners(image_bgr):
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
-        if y < cutoff_top_y or (y + h) > cutoff_bottom_y: continue
-        if x < cutoff_left_x or (x + w) > cutoff_right_x: continue
+        
+        # --- NEU: MITTELPUNKT BERECHNEN ---
+        cx = x + (w // 2)
+        cy = y + (h // 2)
+        
+        # Prüfen ob der MITTELPUNKT in der legalen Zone liegt
+        if cy < cutoff_top_y or cy > cutoff_bottom_y: continue
+        if cx < cutoff_left_x or cx > cutoff_right_x: continue
             
         area = cv2.contourArea(cnt)
         if area > 1000:
