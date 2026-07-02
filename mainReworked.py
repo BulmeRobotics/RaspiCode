@@ -53,7 +53,7 @@ ACTIVE_PIN_R = 22      # Status Pin Kamera R    CM5 GPIO22 -> Giga 28
 
 # --- STREAM CONFIGURATION (Defines) ---
 SHOW_STREAM_L = False
-SHOW_STREAM_R = True
+SHOW_STREAM_R = False
 
 # GPIO Objekte erstellen
 output_pin = DigitalOutputDevice(TRIGGER_PIN)
