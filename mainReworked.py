@@ -257,7 +257,7 @@ class CameraAIThread(threading.Thread):
         height, width = img_shape[:2]
     
         cutoff_top_y    = int(height * 0.25)
-        cutoff_bottom_y = int(height * 0.8)
+        cutoff_bottom_y = int(height * 0.8) #####################################################
             
         cutoff_left_x   = int(width * (1/7))
         cutoff_right_x  = int(width * (6/7))
