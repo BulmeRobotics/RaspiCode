@@ -136,7 +136,6 @@ def warp_target(image_bgr, corners, output_size=200):
 def classify_color(hsv_pixel):
     h, s, v = hsv_pixel
     if v < 80: return "Black"
-    if s < 50: return "White"
     if h < 12 or h > 100: return "Red"
     elif 69 < h < 103: return "Yellow"
     elif 40 < h < 70: return "Green"
@@ -442,28 +441,8 @@ class CameraAIThread(threading.Thread):
                 last_fps_time = current_time
 
             frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
-            
-            coords = self.get_boundary_coords(frame_rgb.shape, self.side_code)
-            
-            # Nur die schrägen Ecken maskieren
-            pts_left = np.array([
-                coords['left_auswurf_top'],
-                coords['left_auswurf_bottom'],
-                [coords['left_auswurf_bottom'][0], frame_rgb.shape[0]],
-                [0, frame_rgb.shape[0]]
-            ], dtype=np.int32)
-            cv2.fillPoly(frame_rgb, [pts_left], (255, 255, 255))
-            
-            pts_right = np.array([
-                coords['right_auswurf_bottom'],
-                coords['right_auswurf_top'],
-                [frame_rgb.shape[1], coords['right_auswurf_top'][1]],
-                [frame_rgb.shape[1], frame_rgb.shape[0]],
-                [coords['right_auswurf_bottom'][0], frame_rgb.shape[0]]
-            ], dtype=np.int32)
-            cv2.fillPoly(frame_rgb, [pts_right], (255, 255, 255))
-            
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+            coords = self.get_boundary_coords(frame_bgr.shape, self.side_code)
             cutoff_top_y = coords['top_y']
             
             display_frame = None
