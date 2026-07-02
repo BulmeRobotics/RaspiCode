@@ -489,7 +489,7 @@ class CameraAIThread(threading.Thread):
                 continue
 
             area = cv2.contourArea(cnt)
-            if area > 7000:                         #Von 1000 auf 7000
+            if area > 1000:                         #Von 1000 auf 7000
                 rect = cv2.minAreaRect(cnt)
                 box = cv2.boxPoints(rect)
                 box = np.int32(box)
@@ -688,7 +688,7 @@ class CameraAIThread(threading.Thread):
                 if not self.is_in_boundary(cx_tmp, cy_tmp, gray_frame.shape, self.side_code):
                     continue
 
-                if w_tmp < 100 or h_tmp < 100 or w_tmp > 300 or h_tmp > 300:        #von 60 auf 100, weil Größe sonst zu klein möglich wäre
+                if w_tmp < 60 or h_tmp < 60 or w_tmp > 350 or h_tmp > 350:        #von 60 auf 100, weil Größe sonst zu klein möglich wäre
                     continue
 
                 aspect_ratio = w_tmp / float(h_tmp)
@@ -702,7 +702,7 @@ class CameraAIThread(threading.Thread):
 
                 letter_crop = gray_frame[y_b:y_b + h_b, x_b:x_b + w_b]
 
-                fill_ratio = 0.55       #von 0.7 auf 0.55, testweise, für mehr rand wege Cogn Targets
+                fill_ratio = 0.7       #von 0.7 auf 0.55, testweise, für mehr rand wege Cogn Targets
                 max_dim = max(w_b, h_b)
                 target_dim = int(max_dim / fill_ratio)
                 pad_top = (target_dim - h_b) // 2
