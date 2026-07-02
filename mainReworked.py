@@ -344,7 +344,7 @@ class CameraAIThread(threading.Thread):
                     return order_points(box)
         return None
 
-    def evaluate_color_target(self, picam2, samples=10, delay=0.03):
+    def evaluate_color_target(self, picam2, samples=25, delay=0.03):
         votes = []
         for i in range(samples):
             try:
@@ -546,7 +546,7 @@ class CameraAIThread(threading.Thread):
                         if label_str.upper() == 'C':
                             detected_frame_label = 'C'
                             print(f"[{self.side_code}] Kognitives Ziel erkannt (C). Confidence: {confidence:.3f}. Starte Farbauswertung...")
-                            color_result = self.evaluate_color_target(picam2, samples=10, delay=0.03)
+                            color_result = self.evaluate_color_target(picam2, samples=25, delay=0.03)
                             if color_result:
                                 self.serial_mgr.write(color_result, self.side_code)
                                 print(f"[{self.side_code}] Farbauswertung Ergebnis: {color_result} - gesendet. Warte auf <D>.")
