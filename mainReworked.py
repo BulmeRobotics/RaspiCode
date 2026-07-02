@@ -340,7 +340,7 @@ class CameraAIThread(threading.Thread):
                 if height == 0: continue
                 aspect_ratio = width / height
                 
-                if 0.7 <= aspect_ratio <= 1.3:
+                if 0.85 <= aspect_ratio <= 1.15:
                     return order_points(box)
         return None
 

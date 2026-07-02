@@ -69,8 +69,8 @@ while True:
     max_h = cv2.getTrackbarPos('Max Height', 'Size Calibration')
     
     # Durch 10 teilen, um Fließkommazahlen zu bekommen
-    min_ar = cv2.getTrackbarPos('Min AR (*10)', 'Size Calibration') / 10.0
-    max_ar = cv2.getTrackbarPos('Max AR (*10)', 'Size Calibration') / 10.0
+    min_ar = 0.85
+    max_ar = 1.15
     
     # 2. Sperrzonen definieren und einzeichnen
     cutoff_top_y = int(frame_rgb.shape[0] * 0.4)
