@@ -583,13 +583,13 @@ class CameraAIThread(threading.Thread):
 
             if self.waiting_for_reset:
                 self.status_pin.on()
-                time.sleep(0.1)
+                #time.sleep(0.1)
                 continue
 
             if not self.enabled:
                 self.status_pin.off()
                 self.alert_active = False
-                time.sleep(0.1)
+                #time.sleep(0.1)
                 continue
 
             if tof and not self.tof_filtered:
@@ -929,7 +929,7 @@ if __name__ == "__main__":
                     cam_right.reset_logic()
                     output_pin.off()
 
-            time.sleep(0.01)
+            #time.sleep(0.01)
 
     except KeyboardInterrupt:
         print("System herunterfahren...")
