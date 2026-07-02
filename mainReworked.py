@@ -177,6 +177,7 @@ def calculate_victim_health(colors):
     if total_sum == 0: status = "U"   
     elif total_sum == 1: status = "S" 
     elif total_sum == 2: status = "H" 
+    
     return status, total_sum
 
 
@@ -343,7 +344,7 @@ class CameraAIThread(threading.Thread):
                     return order_points(box)
         return None
 
-    def evaluate_color_target(self, picam2, samples=20, delay=0.03):
+    def evaluate_color_target(self, picam2, samples=10, delay=0.03):
         votes = []
         for i in range(samples):
             try:
@@ -358,9 +359,10 @@ class CameraAIThread(threading.Thread):
                 warped = warp_target(sample_bgr, detected_corners)
                 colors = scan_target_colors(warped)
                 circle_status, _ = calculate_victim_health(colors)
-                if circle_status in ["H", "S", "U"]:
+                if circle_status in ["H", "S", "U", "F"]:
                     votes.append(circle_status)
-            time.sleep(delay)
+
+            #time.sleep(delay)
 
         if votes:
             most = Counter(votes).most_common(1)[0][0]
@@ -544,7 +546,7 @@ class CameraAIThread(threading.Thread):
                         if label_str.upper() == 'C':
                             detected_frame_label = 'C'
                             print(f"[{self.side_code}] Kognitives Ziel erkannt (C). Confidence: {confidence:.3f}. Starte Farbauswertung...")
-                            color_result = self.evaluate_color_target(picam2, samples=3, delay=0.03)
+                            color_result = self.evaluate_color_target(picam2, samples=10, delay=0.03)
                             if color_result:
                                 self.serial_mgr.write(color_result, self.side_code)
                                 print(f"[{self.side_code}] Farbauswertung Ergebnis: {color_result} - gesendet. Warte auf <D>.")
