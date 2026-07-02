@@ -280,41 +280,6 @@ class CameraAIThread(threading.Thread):
             'right_auswurf_top': cutoff_right_auswurf_top,
         }
 
-    def get_boundary_mask(self, img_shape, side=None):
-        if side is None:
-            side = self.side_code
-            
-        coords = self.get_boundary_coords(img_shape, side)
-        mask = np.zeros(img_shape[:2], dtype=np.uint8)
-        
-        # 1. Start with the rectangular boundary
-        cv2.rectangle(mask, (coords['left_x'], coords['top_y']), (coords['right_x'], coords['bottom_y']), 255, -1)
-        
-        # 2. Exclude left angled region
-        left_top = coords['left_auswurf_top']
-        left_bottom = coords['left_auswurf_bottom']
-        pts_left = np.array([
-            left_top,
-            left_bottom,
-            [left_bottom[0], img_shape[0]],
-            [0, img_shape[0]]
-        ], dtype=np.int32)
-        cv2.fillPoly(mask, [pts_left], 0)
-        
-        # 3. Exclude right angled region
-        right_top = coords['right_auswurf_top']
-        right_bottom = coords['right_auswurf_bottom']
-        pts_right = np.array([
-            right_bottom,
-            right_top,
-            [img_shape[1], right_top[1]],
-            [img_shape[1], img_shape[0]],
-            [right_bottom[0], img_shape[0]]
-        ], dtype=np.int32)
-        cv2.fillPoly(mask, [pts_right], 0)
-        
-        return mask
-
     def is_in_boundary(self, cx, cy, img_shape, side=None):
         coords = self.get_boundary_coords(img_shape, side)
         
@@ -478,12 +443,27 @@ class CameraAIThread(threading.Thread):
 
             frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
             
-            # Den Bereich außerhalb der Boundaries maskieren und mit Weiß überschreiben
-            mask = self.get_boundary_mask(frame_rgb.shape, self.side_code)
-            frame_rgb[mask == 0] = [255, 255, 255]
+            coords = self.get_boundary_coords(frame_rgb.shape, self.side_code)
+            
+            # Nur die schrägen Ecken maskieren
+            pts_left = np.array([
+                coords['left_auswurf_top'],
+                coords['left_auswurf_bottom'],
+                [coords['left_auswurf_bottom'][0], frame_rgb.shape[0]],
+                [0, frame_rgb.shape[0]]
+            ], dtype=np.int32)
+            cv2.fillPoly(frame_rgb, [pts_left], (255, 255, 255))
+            
+            pts_right = np.array([
+                coords['right_auswurf_bottom'],
+                coords['right_auswurf_top'],
+                [frame_rgb.shape[1], coords['right_auswurf_top'][1]],
+                [frame_rgb.shape[1], frame_rgb.shape[0]],
+                [coords['right_auswurf_bottom'][0], frame_rgb.shape[0]]
+            ], dtype=np.int32)
+            cv2.fillPoly(frame_rgb, [pts_right], (255, 255, 255))
             
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            coords = self.get_boundary_coords(frame_bgr.shape, self.side_code)
             cutoff_top_y = coords['top_y']
             
             display_frame = None
