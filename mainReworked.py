@@ -136,6 +136,7 @@ def warp_target(image_bgr, corners, output_size=200):
 def classify_color(hsv_pixel):
     h, s, v = hsv_pixel
     if v < 80: return "Black"
+    if s < 50: return "White"
     if h < 12 or h > 100: return "Red"
     elif 69 < h < 103: return "Yellow"
     elif 40 < h < 70: return "Green"
@@ -278,6 +279,41 @@ class CameraAIThread(threading.Thread):
             'right_auswurf_bottom': cutoff_right_auswurf_bottom,
             'right_auswurf_top': cutoff_right_auswurf_top,
         }
+
+    def get_boundary_mask(self, img_shape, side=None):
+        if side is None:
+            side = self.side_code
+            
+        coords = self.get_boundary_coords(img_shape, side)
+        mask = np.zeros(img_shape[:2], dtype=np.uint8)
+        
+        # 1. Start with the rectangular boundary
+        cv2.rectangle(mask, (coords['left_x'], coords['top_y']), (coords['right_x'], coords['bottom_y']), 255, -1)
+        
+        # 2. Exclude left angled region
+        left_top = coords['left_auswurf_top']
+        left_bottom = coords['left_auswurf_bottom']
+        pts_left = np.array([
+            left_top,
+            left_bottom,
+            [left_bottom[0], img_shape[0]],
+            [0, img_shape[0]]
+        ], dtype=np.int32)
+        cv2.fillPoly(mask, [pts_left], 0)
+        
+        # 3. Exclude right angled region
+        right_top = coords['right_auswurf_top']
+        right_bottom = coords['right_auswurf_bottom']
+        pts_right = np.array([
+            right_bottom,
+            right_top,
+            [img_shape[1], right_top[1]],
+            [img_shape[1], img_shape[0]],
+            [right_bottom[0], img_shape[0]]
+        ], dtype=np.int32)
+        cv2.fillPoly(mask, [pts_right], 0)
+        
+        return mask
 
     def is_in_boundary(self, cx, cy, img_shape, side=None):
         coords = self.get_boundary_coords(img_shape, side)
@@ -441,6 +477,11 @@ class CameraAIThread(threading.Thread):
                 last_fps_time = current_time
 
             frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
+            
+            # Den Bereich außerhalb der Boundaries maskieren und mit Weiß überschreiben
+            mask = self.get_boundary_mask(frame_rgb.shape, self.side_code)
+            frame_rgb[mask == 0] = [255, 255, 255]
+            
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
             coords = self.get_boundary_coords(frame_bgr.shape, self.side_code)
             cutoff_top_y = coords['top_y']
