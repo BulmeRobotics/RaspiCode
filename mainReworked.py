@@ -252,10 +252,8 @@ def calculate_victim_health(colors):
     color_values = {"Yellow": 0, "Blue": 2, "Red": -1, "Black": -2, "Green": 1}
     total_sum = sum(color_values.get(color, 0) for color in colors)
 
-    yellow_count = 0
-    for color in colors:
-        if color_values.get(color, 0) == 0:
-            yellow_count += 1
+    yellow_count = colors.count("Yellow")
+
 
     status = "F"
     if total_sum == 0:
@@ -489,7 +487,7 @@ class CameraAIThread(threading.Thread):
                 continue
 
             area = cv2.contourArea(cnt)
-            if area > 1000:                         #Von 1000 auf 7000
+            if area > 1000:                         # reverted from 7000 to 1000
                 rect = cv2.minAreaRect(cnt)
                 box = cv2.boxPoints(rect)
                 box = np.int32(box)
@@ -583,13 +581,13 @@ class CameraAIThread(threading.Thread):
 
             if self.waiting_for_reset:
                 self.status_pin.on()
-                #time.sleep(0.1)
+                time.sleep(0.1)
                 continue
 
             if not self.enabled:
                 self.status_pin.off()
                 self.alert_active = False
-                #time.sleep(0.1)
+                time.sleep(0.1)
                 continue
 
             if tof and not self.tof_filtered:
@@ -688,7 +686,7 @@ class CameraAIThread(threading.Thread):
                 if not self.is_in_boundary(cx_tmp, cy_tmp, gray_frame.shape, self.side_code):
                     continue
 
-                if w_tmp < 60 or h_tmp < 60 or w_tmp > 350 or h_tmp > 350:        #von 60 auf 100, weil Größe sonst zu klein möglich wäre
+                if w_tmp < 60 or h_tmp < 60 or w_tmp > 300 or h_tmp > 300:        # reverted from 100 back to 60
                     continue
 
                 aspect_ratio = w_tmp / float(h_tmp)
@@ -929,7 +927,7 @@ if __name__ == "__main__":
                     cam_right.reset_logic()
                     output_pin.off()
 
-            #time.sleep(0.01)
+            time.sleep(0.01)
 
     except KeyboardInterrupt:
         print("System herunterfahren...")
