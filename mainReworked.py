@@ -314,6 +314,25 @@ class CameraAIThread(threading.Thread):
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blurred, 50, 150)
 
+        # Kanten in den schrägen Bereichen (Cutoffs) löschen
+        coords = self.get_boundary_coords(image_bgr.shape, side)
+        pts_left = np.array([
+            coords['left_auswurf_top'],
+            coords['left_auswurf_bottom'],
+            [coords['left_auswurf_bottom'][0], image_bgr.shape[0]],
+            [0, image_bgr.shape[0]]
+        ], dtype=np.int32)
+        cv2.fillPoly(edges, [pts_left], 0)
+        
+        pts_right = np.array([
+            coords['right_auswurf_bottom'],
+            coords['right_auswurf_top'],
+            [image_bgr.shape[1], coords['right_auswurf_top'][1]],
+            [image_bgr.shape[1], image_bgr.shape[0]],
+            [coords['right_auswurf_bottom'][0], image_bgr.shape[0]]
+        ], dtype=np.int32)
+        cv2.fillPoly(edges, [pts_right], 0)
+
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             return None
@@ -441,6 +460,25 @@ class CameraAIThread(threading.Thread):
                 last_fps_time = current_time
 
             frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
+            
+            coords = self.get_boundary_coords(frame_rgb.shape, self.side_code)
+            
+            # Die Eck-Polygone vorbereiten (aber nicht ins Bild zeichnen!)
+            pts_left = np.array([
+                coords['left_auswurf_top'],
+                coords['left_auswurf_bottom'],
+                [coords['left_auswurf_bottom'][0], frame_rgb.shape[0]],
+                [0, frame_rgb.shape[0]]
+            ], dtype=np.int32)
+            
+            pts_right = np.array([
+                coords['right_auswurf_bottom'],
+                coords['right_auswurf_top'],
+                [frame_rgb.shape[1], coords['right_auswurf_top'][1]],
+                [frame_rgb.shape[1], frame_rgb.shape[0]],
+                [coords['right_auswurf_bottom'][0], frame_rgb.shape[0]]
+            ], dtype=np.int32)
+            
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
             coords = self.get_boundary_coords(frame_bgr.shape, self.side_code)
             cutoff_top_y = coords['top_y']
@@ -476,6 +514,10 @@ class CameraAIThread(threading.Thread):
             blurred = cv2.GaussianBlur(gray_frame, (7, 7), 0)
             thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                                            cv2.THRESH_BINARY_INV, 21, 5)
+            
+            # Schräge Cutoffs aus dem Threshold-Bild entfernen
+            cv2.fillPoly(thresh, [pts_left], 0)
+            cv2.fillPoly(thresh, [pts_right], 0)
             
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             valid_contours = [c for c in contours if 10 < cv2.contourArea(c) < total_area * 0.99]
