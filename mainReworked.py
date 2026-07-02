@@ -172,11 +172,18 @@ def scan_target_colors(warped_image_bgr):
 def calculate_victim_health(colors):
     color_values = {"Yellow": 0, "Blue": 2, "Red": -1, "Black": -2, "Green": 1}
     total_sum = sum(color_values.get(color, 0) for color in colors)
-        
+    
+    yellow_count = 0
+    for color in colors:
+        if color_values.get(color, 0) == 0: yellow_count += 1
+
     status = "F"
     if total_sum == 0: status = "U"   
     elif total_sum == 1: status = "S" 
     elif total_sum == 2: status = "H" 
+
+    if yellow_count >= 5:
+        status = "F"
     
     return status, total_sum
 
@@ -250,7 +257,7 @@ class CameraAIThread(threading.Thread):
         height, width = img_shape[:2]
     
         cutoff_top_y    = int(height * 0.25)
-        cutoff_bottom_y = int(height * 0.9)
+        cutoff_bottom_y = int(height * 0.8)
             
         cutoff_left_x   = int(width * (1/7))
         cutoff_right_x  = int(width * (6/7))
@@ -380,8 +387,7 @@ class CameraAIThread(threading.Thread):
                 circle_status, _ = calculate_victim_health(colors)
                 if circle_status in ["H", "S", "U", "F"]:
                     votes.append(circle_status)
-
-            #time.sleep(delay)
+            
 
         if votes:
             most = Counter(votes).most_common(1)[0][0]
@@ -538,7 +544,7 @@ class CameraAIThread(threading.Thread):
                 if w_tmp < 60 or h_tmp < 60 or w_tmp > 360 or h_tmp > 360: continue
                 
                 aspect_ratio = w_tmp / float(h_tmp)
-                if 0.5 <= aspect_ratio <= 2.0:
+                if 0.85 <= aspect_ratio <= 1.15:
                     square_contours.append(c)
 
             if square_contours:
