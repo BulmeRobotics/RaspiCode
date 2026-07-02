@@ -1,10 +1,9 @@
-import time
+"""Time-of-Flight (ToF) distance sensor management using VL53L0X."""
+
 import sys
 import threading
+import time
 
-# ==========================================
-# 1. IMPORTS
-# ==========================================
 try:
     import board
     import busio
@@ -26,37 +25,52 @@ except ImportError as e:
     else:
         raise e
 
+
 # ==========================================
-# 2. KONFIGURATION
+# 1. CONFIGURATION
 # ==========================================
-XSHUT_LEFT    = 24
-XSHUT_RIGHT   = 25
-ADDR_LEFT     = 0x2A
-ADDR_RIGHT    = 0x2B
+XSHUT_LEFT = 24
+XSHUT_RIGHT = 25
+ADDR_LEFT = 0x2A
+ADDR_RIGHT = 0x2B
 
 THRESHOLD_MM = 200
-VERBOSE      = False   # Im Thread-Modus standardmaessig stumm
+VERBOSE = False  # Mute by default in thread mode
 
 # ==========================================
-# 3. OEFFENTLICHER ZUSTAND
+# 2. PUBLIC STATE
 # ==========================================
-state = {"L": 0, "R": 0}   # 1 = Objekt nah, 0 = frei
-raw   = {"L": 0, "R": 0}   # Letzte Messung in mm
+state = {"L": 0, "R": 0}  # 1 = object close, 0 = free
+raw = {"L": 0, "R": 0}    # Last measurement in mm
+
 
 def set_threshold(mm):
-    """Schwellwert zur Laufzeit aendern. Gilt nur fuer den aktuellen Prozess."""
+    """Change the threshold value at runtime. Only applies to the current process.
+
+    Args:
+        mm (int): Threshold distance in millimeters.
+    """
     global THRESHOLD_MM
     THRESHOLD_MM = mm
 
-# VL53L0X-Register
+
+# VL53L0X internal registers
 _REG_INT_STATUS = 0x13
-_REG_INT_CLEAR  = 0x0B
-_REG_RANGE      = 0x1E
+_REG_INT_CLEAR = 0x0B
+_REG_RANGE = 0x1E
+
 
 # ==========================================
-# 4. RAW I2C HELPERS
+# 3. RAW I2C HELPERS
 # ==========================================
 def _wr(i2c, addr, data):
+    """Write data to the specified I2C address.
+
+    Args:
+        i2c (busio.I2C): Active I2C bus instance.
+        addr (int): I2C device address.
+        data (list or bytes): Data bytes to write.
+    """
     while not i2c.try_lock():
         pass
     try:
@@ -64,7 +78,18 @@ def _wr(i2c, addr, data):
     finally:
         i2c.unlock()
 
+
 def _rd1(i2c, addr, reg):
+    """Read a single byte from the specified register of an I2C device.
+
+    Args:
+        i2c (busio.I2C): Active I2C bus instance.
+        addr (int): I2C device address.
+        reg (int): Register address to read from.
+
+    Returns:
+        int: Value of the read byte.
+    """
     buf = bytearray(1)
     while not i2c.try_lock():
         pass
@@ -74,7 +99,18 @@ def _rd1(i2c, addr, reg):
         i2c.unlock()
     return buf[0]
 
+
 def _rd2(i2c, addr, reg):
+    """Read two bytes from the specified register of an I2C device.
+
+    Args:
+        i2c (busio.I2C): Active I2C bus instance.
+        addr (int): I2C device address.
+        reg (int): Register address to read from.
+
+    Returns:
+        int: Combined 16-bit integer value of the read bytes.
+    """
     buf = bytearray(2)
     while not i2c.try_lock():
         pass
@@ -84,24 +120,53 @@ def _rd2(i2c, addr, reg):
         i2c.unlock()
     return (buf[0] << 8) | buf[1]
 
+
 def _read_nb(i2c, addr):
+    """Perform a non-blocking read of the distance measurement from the sensor.
+
+    Args:
+        i2c (busio.I2C): Active I2C bus instance.
+        addr (int): I2C device address.
+
+    Returns:
+        int or None: Distance in millimeters, or None if no new measurement is ready.
+    """
     if (_rd1(i2c, addr, _REG_INT_STATUS) & 0x07) != 0x04:
         return None
     dist = _rd2(i2c, addr, _REG_RANGE)
     _wr(i2c, addr, [_REG_INT_CLEAR, 0x01])
     return dist
 
+
 # ==========================================
-# 5. SENSOR-SETUP
+# 4. SENSOR SETUP
 # ==========================================
 def _try_connect(i2c, addr):
+    """Attempt to connect to a VL53L0X sensor at the given address.
+
+    Args:
+        i2c (busio.I2C): Active I2C bus instance.
+        addr (int): I2C address to connect to.
+
+    Returns:
+        adafruit_vl53l0x.VL53L0X or None: Sensor instance on success, None on failure.
+    """
     try:
         return adafruit_vl53l0x.VL53L0X(i2c, address=addr)
     except Exception:
         return None
 
+
 def _setup_sensors(i2c):
-    xshut_left  = DigitalOutputDevice(XSHUT_LEFT,  initial_value=False)
+    """Initialize xshut pins, allocate addresses, and start continuous measurement.
+
+    Args:
+        i2c (busio.I2C): Active I2C bus instance.
+
+    Returns:
+        tuple: (left sensor object, right sensor object, (left xshut device, right xshut device)).
+    """
+    xshut_left = DigitalOutputDevice(XSHUT_LEFT, initial_value=False)
     xshut_right = DigitalOutputDevice(XSHUT_RIGHT, initial_value=False)
     time.sleep(0.2)
 
@@ -135,40 +200,44 @@ def _setup_sensors(i2c):
     right.start_continuous()
     return left, right, (xshut_left, xshut_right)
 
+
 # ==========================================
-# 6. THREAD
+# 5. THREADING & ACQUISITION LOOP
 # ==========================================
 _thread = None
 
+
 def _loop(i2c, left, right, xshut):
+    """Continually polls distance measurements from sensors and updates global state."""
     while True:
-        # Beide Sensoren nicht-blockierend lesen
+        # Perform non-blocking reads on both sensors
         updated = False
         for label, addr in (("L", ADDR_LEFT), ("R", ADDR_RIGHT)):
             dist = _read_nb(i2c, addr)
             if dist is not None:
-                raw[label]   = dist
+                raw[label] = dist
                 state[label] = 1 if dist < THRESHOLD_MM else 0
                 updated = True
         if VERBOSE and updated:
             print(f"L {state['L']}  R {state['R']}")
-        # Kurz warten wenn noch kein neues Sample da, sonst sofort weiter
+        # Wait briefly if no new sample is available, otherwise continue immediately
         time.sleep(0.005 if not updated else 0)
 
+
 def start():
-    """Sensoren initialisieren und Poll-Loop als Daemon-Thread starten."""
+    """Initialize sensors and start the polling loop in a background daemon thread."""
     global _thread
     if _thread and _thread.is_alive():
-        return  # bereits gestartet
+        return  # Already started
     i2c = busio.I2C(board.SCL, board.SDA)
     left, right, xshut = _setup_sensors(i2c)
-    _thread = threading.Thread(target=_loop, args=(i2c, left, right, xshut),
-                               daemon=True)
+    _thread = threading.Thread(target=_loop, args=(i2c, left, right, xshut), daemon=True)
     _thread.start()
     print("ToF-Thread gestartet.")
 
+
 # ==========================================
-# 7. STANDALONE
+# 6. STANDALONE MAIN RUNNER
 # ==========================================
 if __name__ == "__main__":
     VERBOSE = True
