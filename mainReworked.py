@@ -240,13 +240,14 @@ def scan_target_colors(warped_image_bgr):
     return final_colors
 
 
-def scan_target_colors_vertical(image_bgr, cx, cy):
-    """Scan vertically up and down from the center until hitting white to find colors.
+def scan_target_colors_vertical(image_bgr, cx, cy, bh):
+    """Scan vertically using the bounding box height to find colors.
     
     Args:
         image_bgr (numpy.ndarray): Source BGR image.
         cx (int): Center X coordinate.
         cy (int): Center Y coordinate.
+        bh (int): Bounding box height.
         
     Returns:
         list: List of identified dominant color strings for each ring.
@@ -257,50 +258,15 @@ def scan_target_colors_vertical(image_bgr, cx, cy):
     cx = int(max(0, min(width - 1, cx)))
     cy = int(max(0, min(height - 1, cy)))
     
-    def is_white(hsv_pixel):
-        h, s, v = hsv_pixel
-        return s < 60 and v > 130
-
-    # Go UP
-    y_up = cy
-    white_count = 0
-    while y_up > 0:
-        if is_white(hsv_image[y_up, cx]):
-            white_count += 1
-            if white_count >= 3:
-                y_up += 3
-                break
-        else:
-            white_count = 0
-        y_up -= 1
-        
-    # Go DOWN
-    y_down = cy
-    white_count = 0
-    while y_down < height - 1:
-        if is_white(hsv_image[y_down, cx]):
-            white_count += 1
-            if white_count >= 3:
-                y_down -= 3
-                break
-        else:
-            white_count = 0
-        y_down += 1
-        
-    target_h = y_down - y_up
-    if target_h < 10:
-        return ["Unknown"] * 5
-        
-    radius = target_h / 2.0
-    real_cy = y_up + radius
+    radius = bh / 2.0
     
     fractions = [0.1, 0.3, 0.5, 0.7, 0.9]
     final_colors = []
     
     for frac in fractions:
         dist = radius * frac
-        y1 = int(real_cy - dist)
-        y2 = int(real_cy + dist)
+        y1 = int(cy - dist)
+        y2 = int(cy + dist)
         
         y1 = max(0, min(height - 1, y1))
         y2 = max(0, min(height - 1, y2))
@@ -325,13 +291,18 @@ def calculate_victim_health(colors):
         colors (list): List of color names detected from rings.
 
     Returns:
-        tuple: (status string 'H'/'S'/'U'/'F', total point sum).
+        tuple: (status string 'H'/'S'/'U'/'F', total point sum). Or (None, 0) if no valid colors.
     """
     color_values = {"Yellow": 0, "Blue": 2, "Red": -1, "Black": -2, "Green": 1}
-    total_sum = sum(color_values.get(color, 0) for color in colors)
+    
+    # Check if ANY valid color is present. If not, it's not a color target.
+    valid_colors_present = any(c in color_values for c in colors)
+    if not valid_colors_present:
+        return None, 0
+
+    total_sum = sum(color_values.get(color, 0) for color in colors if color in color_values)
 
     yellow_count = colors.count("Yellow")
-
 
     status = "F"
     if total_sum == 0:
@@ -342,7 +313,6 @@ def calculate_victim_health(colors):
         status = "H"
     elif total_sum > 2:
         status = "F"
-
 
     if yellow_count >= 5:
         status = "F"
@@ -611,7 +581,7 @@ class CameraAIThread(threading.Thread):
             sample_rgb = cv2.rotate(sample_rgb, cv2.ROTATE_180)
             sample_bgr = cv2.cvtColor(sample_rgb, cv2.COLOR_RGB2BGR)
 
-            colors = scan_target_colors_vertical(sample_bgr, cx, cy)
+            colors = scan_target_colors_vertical(sample_bgr, cx, cy, bh)
             circle_status, _ = calculate_victim_health(colors)
             if circle_status in ["H", "S", "U", "F"]:
                 votes.append(circle_status)
@@ -746,7 +716,7 @@ class CameraAIThread(threading.Thread):
 
             # --- DETECTION 0: Colors (Cognitive Targets) ---
             hsv_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-            lower_color = np.array([0, 60, 60])
+            lower_color = np.array([0, 80, 60])
             upper_color = np.array([179, 255, 255])
             color_mask = cv2.inRange(hsv_frame, lower_color, upper_color)
 
