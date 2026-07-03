@@ -240,93 +240,6 @@ def scan_target_colors(warped_image_bgr):
     return final_colors
 
 
-def scan_target_colors_vertical(image_bgr, cx, cy, bh):
-    """Scan vertically up and down from the center until hitting white to find colors.
-    
-    Args:
-        image_bgr (numpy.ndarray): Source BGR image.
-        cx (int): Center X coordinate.
-        cy (int): Center Y coordinate.
-        bh (int): Bounding box height (as minimum fallback).
-        
-    Returns:
-        list: List of identified dominant color strings for each ring.
-    """
-    hsv_image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
-    height, width = hsv_image.shape[:2]
-    
-    cx = int(max(0, min(width - 1, cx)))
-    cy = int(max(0, min(height - 1, cy)))
-    
-    def is_background(hsv_pixel):
-        h, s, v = hsv_pixel
-        # Wenn es schwarz ist (v < 80), ist es ein gültiger Ring und KEIN Hintergrund!
-        if v < 80:
-            return False
-        # Wenn es nicht schwarz ist, aber kaum Sättigung hat (s < 60),
-        # ist es grau oder weiß -> also Hintergrundpapier/Wand!
-        if s < 60:
-            return True
-        return False
-
-    # Go UP
-    y_up = cy
-    bg_count = 0
-    while y_up > 0:
-        if is_background(hsv_image[y_up, cx]):
-            bg_count += 1
-            if bg_count >= 5:
-                y_up += 5
-                break
-        else:
-            bg_count = 0
-        y_up -= 1
-        
-    # Go DOWN
-    y_down = cy
-    bg_count = 0
-    while y_down < height - 1:
-        if is_background(hsv_image[y_down, cx]):
-            bg_count += 1
-            if bg_count >= 5:
-                y_down -= 5
-                break
-        else:
-            bg_count = 0
-        y_down += 1
-        
-    radius_up = cy - y_up
-    radius_down = y_down - cy
-    radius = max(radius_up, radius_down)
-    
-    # Fallback to the colored bounding box height if white search failed or was cut off
-    if radius < bh / 2.0:
-        radius = bh / 2.0
-        
-    fractions = [0.1, 0.3, 0.5, 0.7, 0.9]
-    final_colors = []
-    
-    for frac in fractions:
-        dist = radius * frac
-        y1 = int(cy - dist)
-        y2 = int(cy + dist)
-        
-        y1 = max(0, min(height - 1, y1))
-        y2 = max(0, min(height - 1, y2))
-        
-        c1 = classify_color(hsv_image[y1, cx])
-        c2 = classify_color(hsv_image[y2, cx])
-        
-        valid_colors = [c for c in [c1, c2] if c not in ["White", "Unknown"]]
-        if valid_colors:
-            most_common = collections.Counter(valid_colors).most_common(1)[0][0]
-            final_colors.append(most_common)
-        else:
-            final_colors.append(c1 if c1 != "Unknown" else c2)
-            
-    return final_colors
-
-
 def calculate_victim_health(colors):
     """Calculate the victim status/health based on concentric ring colors.
 
@@ -334,18 +247,13 @@ def calculate_victim_health(colors):
         colors (list): List of color names detected from rings.
 
     Returns:
-        tuple: (status string 'H'/'S'/'U'/'F', total point sum). Or (None, 0) if no valid colors.
+        tuple: (status string 'H'/'S'/'U'/'F', total point sum).
     """
     color_values = {"Yellow": 0, "Blue": 2, "Red": -1, "Black": -2, "Green": 1}
-    
-    # Check if ANY valid color is present. If not, it's not a color target.
-    valid_colors_present = any(c in color_values for c in colors)
-    if not valid_colors_present:
-        return None, 0
-
-    total_sum = sum(color_values.get(color, 0) for color in colors if color in color_values)
+    total_sum = sum(color_values.get(color, 0) for color in colors)
 
     yellow_count = colors.count("Yellow")
+
 
     status = "F"
     if total_sum == 0:
@@ -356,6 +264,7 @@ def calculate_victim_health(colors):
         status = "H"
     elif total_sum > 2:
         status = "F"
+
 
     if yellow_count >= 5:
         status = "F"
@@ -596,26 +505,18 @@ class CameraAIThread(threading.Thread):
                     return order_points(box)
         return None
 
-    def evaluate_color_target(self, picam2, box_coords, samples=20, delay=0.03):
-        """Capture multiple frame samples to evaluate and vote on the target color status using vertical scan.
+    def evaluate_color_target(self, picam2, samples=25, delay=0.03):
+        """Capture multiple frame samples to evaluate and vote on the target color status.
 
         Args:
             picam2 (Picamera2): The Picamera2 camera instance.
-            box_coords (tuple): The (x, y, w, h) bounding box of the detected target.
-            samples (int, optional): Number of frame samples to capture. Defaults to 20.
+            samples (int, optional): Number of frame samples to capture. Defaults to 25.
             delay (float, optional): Inter-frame delay in seconds. Defaults to 0.03.
 
         Returns:
             str or None: The voted status 'H'/'S'/'U'/'F' if votes exist, else None.
         """
         votes = []
-        if box_coords is None:
-            return None
-            
-        bx, by, bw, bh = box_coords
-        cx = bx + (bw // 2)
-        cy = by + (bh // 2)
-        
         for i in range(samples):
             try:
                 sample_rgb = picam2.capture_array()
@@ -624,16 +525,17 @@ class CameraAIThread(threading.Thread):
             sample_rgb = cv2.rotate(sample_rgb, cv2.ROTATE_180)
             sample_bgr = cv2.cvtColor(sample_rgb, cv2.COLOR_RGB2BGR)
 
-            colors = scan_target_colors_vertical(sample_bgr, cx, cy, bh)
-            circle_status, _ = calculate_victim_health(colors)
-            if circle_status in ["H", "S", "U", "F"]:
-                votes.append(circle_status)
-                
-            time.sleep(delay)
+            detected_corners = self.find_target_corners(sample_bgr, self.side_code)
+            if detected_corners is not None:
+                warped = warp_target(sample_bgr, detected_corners)
+                colors = scan_target_colors(warped)
+                circle_status, _ = calculate_victim_health(colors)
+                if circle_status in ["H", "S", "U", "F"]:
+                    votes.append(circle_status)
 
         if votes:
             most = collections.Counter(votes).most_common(1)[0][0]
-            print(f"[{self.side_code}] Color-eval votes (vertical scan): {collections.Counter(votes)} -> {most}")
+            print(f"[{self.side_code}] Color-eval votes: {collections.Counter(votes)} -> {most}")
             return most
         return None
 
@@ -757,63 +659,62 @@ class CameraAIThread(threading.Thread):
             box_coords = None
             detected_corners = None
 
-            # --- DETECTION 0: Colors (Cognitive Targets) ---
-            hsv_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-            lower_color = np.array([0, 80, 60])
-            upper_color = np.array([179, 255, 255])
-            color_mask = cv2.inRange(hsv_frame, lower_color, upper_color)
-
-            cv2.fillPoly(color_mask, [pts_left], 0)
-            cv2.fillPoly(color_mask, [pts_right], 0)
-
-            color_pixel_count = cv2.countNonZero(color_mask)
-            
-            if color_pixel_count > 500:
-                contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                if contours:
-                    largest_contour = max(contours, key=cv2.contourArea)
-                    if cv2.contourArea(largest_contour) > 500:
-                        x_b, y_b, w_b, h_b = cv2.boundingRect(largest_contour)
-                        box_coords = (x_b, y_b, w_b, h_b)
-                        cx_tmp = x_b + (w_b // 2)
-                        cy_tmp = y_b + (h_b // 2)
-
-                        if self.is_in_boundary(cx_tmp, cy_tmp, frame_bgr.shape, self.side_code):
-                            print(f"[{self.side_code}] Bunte Pixel gefunden ({color_pixel_count}). Starte Farbauswertung...")
-                            color_result = self.evaluate_color_target(picam2, box_coords=box_coords, samples=20, delay=0.03)
-                            if color_result:
-                                if not self.enabled:
-                                    print(f"[{self.side_code}] Wurde während Farbauswertung deaktiviert.")
-                                    continue
-                                self.serial_mgr.write(color_result, self.side_code)
-                                print(f"[{self.side_code}] Farbauswertung Ergebnis: {color_result} - gesendet. Warte auf <D>.")
-                                self.reset_logic()
-                                self.enabled = False
-                                self.waiting_for_reset = True
-                                self.alert_active = True
-                                continue
-                            else:
-                                print(f"[{self.side_code}] Farbauswertung lieferte kein Ergebnis.")
-
             # --- DETECTION 1: Letters ---
-            detected_corners = self.find_target_corners(frame_bgr, self.side_code)
-            
-            if detected_corners is not None:
-                # Store box_coords for GUI drawing (just a bounding box of the corners)
-                pts = detected_corners.reshape((-1, 1, 2)).astype(np.int32)
-                x_b, y_b, w_b, h_b = cv2.boundingRect(pts)
+            gray_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+            total_area = gray_frame.shape[0] * gray_frame.shape[1]
+
+            blurred = cv2.GaussianBlur(gray_frame, (7, 7), 0)
+            thresh = cv2.adaptiveThreshold(
+                blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 5
+            )
+
+            # Remove angled cutoffs from thresholded image
+            cv2.fillPoly(thresh, [pts_left], 0)
+            cv2.fillPoly(thresh, [pts_right], 0)
+
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            valid_contours = [c for c in contours if 10 < cv2.contourArea(c) < total_area * 0.99]
+
+            square_contours = []
+            for c in valid_contours:
+                x_tmp, y_tmp, w_tmp, h_tmp = cv2.boundingRect(c)
+                if h_tmp == 0:
+                    continue
+
+                # Calculate center point
+                cx_tmp = x_tmp + (w_tmp // 2)
+                cy_tmp = y_tmp + (h_tmp // 2)
+
+                # Ignore if center point is out of boundary
+                if not self.is_in_boundary(cx_tmp, cy_tmp, gray_frame.shape, self.side_code):
+                    continue
+
+                if w_tmp < 100 or h_tmp < 100 or w_tmp > 360 or h_tmp > 360:        # reverted from 100 back to 60
+                    continue
+
+                aspect_ratio = w_tmp / float(h_tmp)
+                if 0.85 <= aspect_ratio <= 1.15:
+                    square_contours.append(c)
+
+            if square_contours:
+                largest_contour = max(square_contours, key=cv2.contourArea)
+                x_b, y_b, w_b, h_b = cv2.boundingRect(largest_contour)
                 box_coords = (x_b, y_b, w_b, h_b)
-                
-                # Warp the image to get a perfect 400x400 square of the letter
-                warped_bgr = warp_target(frame_bgr, detected_corners)
-                warped_gray = cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2GRAY)
-                
-                # The warped image is exactly 400x400. 
-                # If the AI model expects 0.7 fill ratio, we can simulate padding by cropping a bit 
-                # or just padding it further. Let's provide the full warped image and resize it.
-                # Actually, in the old script, fill_ratio = 0.7 was used to ADD padding around the boundingRect.
-                # Since warp_target crops to the very edges of the paper, the letter is already surrounded by some white paper.
-                prep_img = cv2.resize(warped_gray, (self.ki_w, self.ki_h), interpolation=cv2.INTER_AREA)
+
+                letter_crop = gray_frame[y_b:y_b + h_b, x_b:x_b + w_b]
+
+                fill_ratio = 0.7       #von 0.7 auf 0.55, testweise, für mehr rand wege Cogn Targets
+                max_dim = max(w_b, h_b)
+                target_dim = int(max_dim / fill_ratio)
+                pad_top = (target_dim - h_b) // 2
+                pad_bottom = target_dim - h_b - pad_top
+                pad_left = (target_dim - w_b) // 2
+                pad_right = target_dim - w_b - pad_left
+                bg_color = int(np.median(gray_frame[0:10, 0:10]))
+                padded_img = cv2.copyMakeBorder(
+                    letter_crop, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=bg_color
+                )
+                prep_img = cv2.resize(padded_img, (self.ki_w, self.ki_h), interpolation=cv2.INTER_AREA)
 
                 prep_img_expanded = np.expand_dims(prep_img, axis=-1)
                 input_data = np.expand_dims(prep_img_expanded, axis=0)
@@ -837,10 +738,38 @@ class CameraAIThread(threading.Thread):
                 best_class_id = np.argmax(scores)
                 confidence = scores[best_class_id]
 
-                if confidence > MIN_CONFIDENCE:
+                if confidence > MIN_CONFIDENCE_C:
                     label_str = LABELS.get(best_class_id)
-                    if label_str and label_str.lower() != "background" and label_str.upper() != "C":
-                        detected_frame_label = label_str
+                    if label_str and label_str.lower() != "background":
+                        if label_str.upper() == "C":
+                            detected_frame_label = "C"
+                            print(f"[{self.side_code}] Kognitives Ziel erkannt (C). Confidence: {confidence:.3f}. Starte Farbauswertung...")
+                            color_result = self.evaluate_color_target(picam2, samples=25, delay=0.03)
+                            if color_result:
+                                if not self.enabled:
+                                    print(f"[{self.side_code}] Wurde während Farbauswertung deaktiviert.")
+                                    continue
+                                self.serial_mgr.write(color_result, self.side_code)
+                                print(f"[{self.side_code}] Farbauswertung Ergebnis: {color_result} - gesendet. Warte auf <D>.")
+                                self.reset_logic()
+                                self.enabled = False
+                                self.waiting_for_reset = True
+                                self.alert_active = True
+                                continue
+                            else:
+                                print(f"[{self.side_code}] Farbauswertung lieferte kein Ergebnis.")
+                        else:
+                            detected_frame_label = label_str
+
+            # --- DETECTION 2: Color Rings ---
+            if not detected_frame_label:
+                detected_corners = self.find_target_corners(frame_bgr, self.side_code)
+                if detected_corners is not None:
+                    warped = warp_target(frame_bgr, detected_corners)
+                    colors = scan_target_colors(warped)
+                    circle_status, _ = calculate_victim_health(colors)
+                    if circle_status in ["H", "S", "U"]:
+                        detected_frame_label = circle_status
 
             # --- GUI VISUALIZATION ---
             if self.show_stream:
