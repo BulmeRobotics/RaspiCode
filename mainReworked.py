@@ -42,7 +42,7 @@ except ImportError:
 # ==========================================
 # 1. CONFIGURATION
 # ==========================================
-MODEL_PATH = "trainedCog.tflite"
+MODEL_PATH = "trainedWMWhiteBackground.tflite"
 LABEL_PATH = "labelsCog.txt"
 MIN_CONFIDENCE = 0.9
 MIN_CONFIDENCE_C = 0.8  # Lower threshold for cognitive target 'C'
