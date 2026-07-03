@@ -207,42 +207,39 @@ def classify_color(hsv_pixel):
 
 def is_valid_background_crop(hsv_image):
     """
-    Prüft systematisch den äußersten Rand des 200x200 Bildes auf den weißen Hintergrund.
-    Da der größte Farbring bei Radius 90 liegt (endet bei Pixel 10 bzw. 190),
-    sind die Ränder bei Pixel 3 und 196 garantiert reiner Hintergrund.
+    Prüft ausschließlich die vier extremen Ecken des 200x200 Bildes auf den weißen Hintergrund.
+    Dadurch werden Probleme mit abgeschnittenen oder verdeckten Rändern umgangen.
     """
     background_samples = []
     
-    # Wir nehmen Stichproben entlang des oberen und unteren Randes
-    for x_pos in range(10, 190, 20):
-        background_samples.append(classify_color(hsv_image[3, x_pos]))   # Oberer Rand
-        background_samples.append(classify_color(hsv_image[196, x_pos])) # Unterer Rand
-        
-    # Wir nehmen Stichproben entlang des linken und rechten Randes
-    for y_pos in range(10, 190, 20):
-        background_samples.append(classify_color(hsv_image[y_pos, 3]))   # Linker Rand
-        background_samples.append(classify_color(hsv_image[y_pos, 196])) # Rechter Rand
-
-    # Wir nehmen zur absoluten Sicherheit noch tiefe Stichproben direkt aus den 4 Ecken
-    corners = [(5, 5), (5, 194), (194, 5), (194, 194)]
-    for cx, cy in corners:
+    # Wir definieren kleine Cluster (jeweils 3 Pixel) tief in den 4 Ecken.
+    # Das ist robuster als ein einzelner Pixel, falls genau dort ein Rausch-Artefakt liegt.
+    corner_clusters = [
+        # Oben Links
+        (5, 5), (10, 5), (5, 10),
+        # Oben Rechts
+        (194, 5), (189, 5), (194, 10),
+        # Unten Links
+        (5, 194), (10, 194), (5, 189),
+        # Unten Rechts
+        (194, 194), (189, 194), (194, 189)
+    ]
+    
+    for cx, cy in corner_clusters:
         background_samples.append(classify_color(hsv_image[cy, cx]))
 
-    # Auswertung der gesammelten Stichproben
+    # Auswertung der 12 gesammelten Pixel
     white_count = background_samples.count("White")
     total_samples = len(background_samples)
-    
-    # Berechne den prozentualen Anteil an Weiß im Hintergrundbereich
     white_ratio = white_count / total_samples
     
-    # Wenn mehr als 80% dieser äußeren Pixel weiß sind, betrachten wir den Crop als valide.
-    # Dieser Puffer von 20% erlaubt minimale Schattenwürfe oder leichte Unreinheiten.
-    if white_ratio > 0.80:
+    # Wenn mindestens 65% (also ca. 8 von 12) dieser Eck-Pixel weiß sind, ist der Crop valide.
+    # Dieser Wert erlaubt kleine Schatten in den Ecken, ohne das Bild sofort zu verwerfen.
+    if white_ratio > 0.65:
         return True
     else:
-        # Für Debugging-Zwecke sehr hilfreich: Zeigt an, warum der Crop abgelehnt wurde
-        dominant_wrong_color = collections.Counter(background_samples).most_common(1)[0][0]
-        print(f"[DEBUG] Crop abgelehnt! Hintergrund ist zu {int((1-white_ratio)*100)}% verunreinigt (Dominant: {dominant_wrong_color}).")
+        # Optional: Print-Statement auskommentieren, wenn es die Konsole zu sehr zuspammt
+        # print(f"[DEBUG] Ungültiger Crop verworfen! Ecken-Weißanteil nur bei {int(white_ratio*100)}%")
         return False
     
 
@@ -561,6 +558,9 @@ class CameraAIThread(threading.Thread):
         Returns:
             str or None: The voted status 'H'/'S'/'U'/'F' if votes exist, else None.
         """
+
+
+
         votes = []
         for i in range(samples):
             try:
@@ -574,6 +574,8 @@ class CameraAIThread(threading.Thread):
             if detected_corners is not None:
                 warped = warp_target(sample_bgr, detected_corners)
                 colors = scan_target_colors(warped)
+                if colors is None:
+                    continue
                 circle_status, _ = calculate_victim_health(colors)
                 if circle_status in ["H", "S", "U", "F"]:
                     votes.append(circle_status)
@@ -812,9 +814,17 @@ class CameraAIThread(threading.Thread):
                 if detected_corners is not None:
                     warped = warp_target(frame_bgr, detected_corners)
                     colors = scan_target_colors(warped)
-                    circle_status, _ = calculate_victim_health(colors)
-                    if circle_status in ["H", "S", "U"]:
-                        detected_frame_label = circle_status
+
+                    if colors is not None:
+                        # Die Farben wurden erfolgreich gelesen (Crop war valide)
+                        circle_status, _ = calculate_victim_health(colors)
+                        if circle_status in ["H", "S", "U"]:
+                            detected_frame_label = circle_status
+                    else:
+                        # Der Crop wurde aufgrund der Ecken abgelehnt.
+                        # detected_frame_label bleibt 'None'. Die GUI zeigt weiterhin "Suche..."
+                        # und die Kamera analysiert im nächsten Takt einfach das nächste Frame.
+                        pass
 
             # --- GUI VISUALIZATION ---
             if self.show_stream:
