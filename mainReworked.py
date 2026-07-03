@@ -193,8 +193,6 @@ def classify_color(hsv_pixel):
     h, s, v = hsv_pixel
     if v < 80:
         return "Black"
-    if s < 50 and v > 180:
-        return "White"
     if h < 12 or h > 100:
         return "Red"
     elif 69 < h < 103:
@@ -205,43 +203,6 @@ def classify_color(hsv_pixel):
         return "Blue"
     return "Unknown"
 
-def is_valid_background_crop(hsv_image):
-    """
-    Prüft ausschließlich die vier extremen Ecken des 200x200 Bildes auf den weißen Hintergrund.
-    Dadurch werden Probleme mit abgeschnittenen oder verdeckten Rändern umgangen.
-    """
-    background_samples = []
-    
-    # Wir definieren kleine Cluster (jeweils 3 Pixel) tief in den 4 Ecken.
-    # Das ist robuster als ein einzelner Pixel, falls genau dort ein Rausch-Artefakt liegt.
-    corner_clusters = [
-        # Oben Links
-        (5, 5), (10, 5), (5, 10),
-        # Oben Rechts
-        (194, 5), (189, 5), (194, 10),
-        # Unten Links
-        (5, 194), (10, 194), (5, 189),
-        # Unten Rechts
-        (194, 194), (189, 194), (194, 189)
-    ]
-    
-    for cx, cy in corner_clusters:
-        background_samples.append(classify_color(hsv_image[cy, cx]))
-
-    # Auswertung der 12 gesammelten Pixel
-    white_count = background_samples.count("White")
-    total_samples = len(background_samples)
-    white_ratio = white_count / total_samples
-    
-    # Wenn mindestens 65% (also ca. 8 von 12) dieser Eck-Pixel weiß sind, ist der Crop valide.
-    # Dieser Wert erlaubt kleine Schatten in den Ecken, ohne das Bild sofort zu verwerfen.
-    if white_ratio > 0.65:
-        return True
-    else:
-        # Optional: Print-Statement auskommentieren, wenn es die Konsole zu sehr zuspammt
-        # print(f"[DEBUG] Ungültiger Crop verworfen! Ecken-Weißanteil nur bei {int(white_ratio*100)}%")
-        return False
-    
 
 def scan_target_colors(warped_image_bgr):
     """Scan the warped target at concentric ring radii to identify colors.
@@ -253,9 +214,6 @@ def scan_target_colors(warped_image_bgr):
         list: List of identified dominant color strings for each ring.
     """
     hsv_image = cv2.cvtColor(warped_image_bgr, cv2.COLOR_BGR2HSV)
-
-    if not is_valid_background_crop(hsv_image): return None
-    
     center = (100, 100)
     radii = [10, 30, 50, 70, 90]
     final_colors = []
@@ -547,7 +505,7 @@ class CameraAIThread(threading.Thread):
                     return order_points(box)
         return None
 
-    def evaluate_color_target(self, picam2, samples=15, delay=0.03):
+    def evaluate_color_target(self, picam2, samples=25, delay=0.03):
         """Capture multiple frame samples to evaluate and vote on the target color status.
 
         Args:
@@ -558,9 +516,6 @@ class CameraAIThread(threading.Thread):
         Returns:
             str or None: The voted status 'H'/'S'/'U'/'F' if votes exist, else None.
         """
-
-
-
         votes = []
         for i in range(samples):
             try:
@@ -574,8 +529,6 @@ class CameraAIThread(threading.Thread):
             if detected_corners is not None:
                 warped = warp_target(sample_bgr, detected_corners)
                 colors = scan_target_colors(warped)
-                if colors is None:
-                    continue
                 circle_status, _ = calculate_victim_health(colors)
                 if circle_status in ["H", "S", "U", "F"]:
                     votes.append(circle_status)
@@ -791,7 +744,7 @@ class CameraAIThread(threading.Thread):
                         if label_str.upper() == "C":
                             detected_frame_label = "C"
                             print(f"[{self.side_code}] Kognitives Ziel erkannt (C). Confidence: {confidence:.3f}. Starte Farbauswertung...")
-                            color_result = self.evaluate_color_target(picam2, samples=15, delay=0.03)
+                            color_result = self.evaluate_color_target(picam2, samples=25, delay=0.03)
                             if color_result:
                                 if not self.enabled:
                                     print(f"[{self.side_code}] Wurde während Farbauswertung deaktiviert.")
@@ -814,17 +767,9 @@ class CameraAIThread(threading.Thread):
                 if detected_corners is not None:
                     warped = warp_target(frame_bgr, detected_corners)
                     colors = scan_target_colors(warped)
-
-                    if colors is not None:
-                        # Die Farben wurden erfolgreich gelesen (Crop war valide)
-                        circle_status, _ = calculate_victim_health(colors)
-                        if circle_status in ["H", "S", "U"]:
-                            detected_frame_label = circle_status
-                    else:
-                        # Der Crop wurde aufgrund der Ecken abgelehnt.
-                        # detected_frame_label bleibt 'None'. Die GUI zeigt weiterhin "Suche..."
-                        # und die Kamera analysiert im nächsten Takt einfach das nächste Frame.
-                        pass
+                    circle_status, _ = calculate_victim_health(colors)
+                    if circle_status in ["H", "S", "U"]:
+                        detected_frame_label = circle_status
 
             # --- GUI VISUALIZATION ---
             if self.show_stream:
