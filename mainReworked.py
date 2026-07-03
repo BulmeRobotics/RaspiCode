@@ -241,13 +241,13 @@ def scan_target_colors(warped_image_bgr):
 
 
 def scan_target_colors_vertical(image_bgr, cx, cy, bh):
-    """Scan vertically using the bounding box height to find colors.
+    """Scan vertically up and down from the center until hitting white to find colors.
     
     Args:
         image_bgr (numpy.ndarray): Source BGR image.
         cx (int): Center X coordinate.
         cy (int): Center Y coordinate.
-        bh (int): Bounding box height.
+        bh (int): Bounding box height (as minimum fallback).
         
     Returns:
         list: List of identified dominant color strings for each ring.
@@ -258,8 +258,51 @@ def scan_target_colors_vertical(image_bgr, cx, cy, bh):
     cx = int(max(0, min(width - 1, cx)))
     cy = int(max(0, min(height - 1, cy)))
     
-    radius = bh / 2.0
+    def is_background(hsv_pixel):
+        h, s, v = hsv_pixel
+        # Wenn es schwarz ist (v < 80), ist es ein gültiger Ring und KEIN Hintergrund!
+        if v < 80:
+            return False
+        # Wenn es nicht schwarz ist, aber kaum Sättigung hat (s < 60),
+        # ist es grau oder weiß -> also Hintergrundpapier/Wand!
+        if s < 60:
+            return True
+        return False
+
+    # Go UP
+    y_up = cy
+    bg_count = 0
+    while y_up > 0:
+        if is_background(hsv_image[y_up, cx]):
+            bg_count += 1
+            if bg_count >= 5:
+                y_up += 5
+                break
+        else:
+            bg_count = 0
+        y_up -= 1
+        
+    # Go DOWN
+    y_down = cy
+    bg_count = 0
+    while y_down < height - 1:
+        if is_background(hsv_image[y_down, cx]):
+            bg_count += 1
+            if bg_count >= 5:
+                y_down -= 5
+                break
+        else:
+            bg_count = 0
+        y_down += 1
+        
+    radius_up = cy - y_up
+    radius_down = y_down - cy
+    radius = max(radius_up, radius_down)
     
+    # Fallback to the colored bounding box height if white search failed or was cut off
+    if radius < bh / 2.0:
+        radius = bh / 2.0
+        
     fractions = [0.1, 0.3, 0.5, 0.7, 0.9]
     final_colors = []
     
