@@ -193,6 +193,8 @@ def classify_color(hsv_pixel):
     h, s, v = hsv_pixel
     if v < 80:
         return "Black"
+    if s < 50 and v > 180:
+        return "White"
     if h < 12 or h > 100:
         return "Red"
     elif 69 < h < 103:
@@ -203,6 +205,46 @@ def classify_color(hsv_pixel):
         return "Blue"
     return "Unknown"
 
+def is_valid_background_crop(hsv_image):
+    """
+    Prüft systematisch den äußersten Rand des 200x200 Bildes auf den weißen Hintergrund.
+    Da der größte Farbring bei Radius 90 liegt (endet bei Pixel 10 bzw. 190),
+    sind die Ränder bei Pixel 3 und 196 garantiert reiner Hintergrund.
+    """
+    background_samples = []
+    
+    # Wir nehmen Stichproben entlang des oberen und unteren Randes
+    for x_pos in range(10, 190, 20):
+        background_samples.append(classify_color(hsv_image[3, x_pos]))   # Oberer Rand
+        background_samples.append(classify_color(hsv_image[196, x_pos])) # Unterer Rand
+        
+    # Wir nehmen Stichproben entlang des linken und rechten Randes
+    for y_pos in range(10, 190, 20):
+        background_samples.append(classify_color(hsv_image[y_pos, 3]))   # Linker Rand
+        background_samples.append(classify_color(hsv_image[y_pos, 196])) # Rechter Rand
+
+    # Wir nehmen zur absoluten Sicherheit noch tiefe Stichproben direkt aus den 4 Ecken
+    corners = [(5, 5), (5, 194), (194, 5), (194, 194)]
+    for cx, cy in corners:
+        background_samples.append(classify_color(hsv_image[cy, cx]))
+
+    # Auswertung der gesammelten Stichproben
+    white_count = background_samples.count("White")
+    total_samples = len(background_samples)
+    
+    # Berechne den prozentualen Anteil an Weiß im Hintergrundbereich
+    white_ratio = white_count / total_samples
+    
+    # Wenn mehr als 80% dieser äußeren Pixel weiß sind, betrachten wir den Crop als valide.
+    # Dieser Puffer von 20% erlaubt minimale Schattenwürfe oder leichte Unreinheiten.
+    if white_ratio > 0.80:
+        return True
+    else:
+        # Für Debugging-Zwecke sehr hilfreich: Zeigt an, warum der Crop abgelehnt wurde
+        dominant_wrong_color = collections.Counter(background_samples).most_common(1)[0][0]
+        print(f"[DEBUG] Crop abgelehnt! Hintergrund ist zu {int((1-white_ratio)*100)}% verunreinigt (Dominant: {dominant_wrong_color}).")
+        return False
+    
 
 def scan_target_colors(warped_image_bgr):
     """Scan the warped target at concentric ring radii to identify colors.
@@ -214,6 +256,9 @@ def scan_target_colors(warped_image_bgr):
         list: List of identified dominant color strings for each ring.
     """
     hsv_image = cv2.cvtColor(warped_image_bgr, cv2.COLOR_BGR2HSV)
+
+    if not is_valid_background_crop(hsv_image): return None
+    
     center = (100, 100)
     radii = [10, 30, 50, 70, 90]
     final_colors = []
