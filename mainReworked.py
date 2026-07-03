@@ -796,61 +796,24 @@ class CameraAIThread(threading.Thread):
                                 print(f"[{self.side_code}] Farbauswertung lieferte kein Ergebnis.")
 
             # --- DETECTION 1: Letters ---
-            gray_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
-            total_area = gray_frame.shape[0] * gray_frame.shape[1]
-
-            blurred = cv2.GaussianBlur(gray_frame, (7, 7), 0)
-            thresh = cv2.adaptiveThreshold(
-                blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 5
-            )
-
-            # Remove angled cutoffs from thresholded image
-            cv2.fillPoly(thresh, [pts_left], 0)
-            cv2.fillPoly(thresh, [pts_right], 0)
-
-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            valid_contours = [c for c in contours if 10 < cv2.contourArea(c) < total_area * 0.99]
-
-            square_contours = []
-            for c in valid_contours:
-                x_tmp, y_tmp, w_tmp, h_tmp = cv2.boundingRect(c)
-                if h_tmp == 0:
-                    continue
-
-                # Calculate center point
-                cx_tmp = x_tmp + (w_tmp // 2)
-                cy_tmp = y_tmp + (h_tmp // 2)
-
-                # Ignore if center point is out of boundary
-                if not self.is_in_boundary(cx_tmp, cy_tmp, gray_frame.shape, self.side_code):
-                    continue
-
-                if w_tmp < 100 or h_tmp < 100 or w_tmp > 360 or h_tmp > 360:        # reverted from 100 back to 60
-                    continue
-
-                aspect_ratio = w_tmp / float(h_tmp)
-                if 0.85 <= aspect_ratio <= 1.15:
-                    square_contours.append(c)
-
-            if square_contours:
-                largest_contour = max(square_contours, key=cv2.contourArea)
-                x_b, y_b, w_b, h_b = cv2.boundingRect(largest_contour)
+            detected_corners = self.find_target_corners(frame_bgr, self.side_code)
+            
+            if detected_corners is not None:
+                # Store box_coords for GUI drawing (just a bounding box of the corners)
+                pts = detected_corners.reshape((-1, 1, 2)).astype(np.int32)
+                x_b, y_b, w_b, h_b = cv2.boundingRect(pts)
                 box_coords = (x_b, y_b, w_b, h_b)
-
-                letter_crop = gray_frame[y_b:y_b + h_b, x_b:x_b + w_b]
-
-                fill_ratio = 0.7       #von 0.7 auf 0.55, testweise, für mehr rand wege Cogn Targets
-                max_dim = max(w_b, h_b)
-                target_dim = int(max_dim / fill_ratio)
-                pad_top = (target_dim - h_b) // 2
-                pad_bottom = target_dim - h_b - pad_top
-                pad_left = (target_dim - w_b) // 2
-                pad_right = target_dim - w_b - pad_left
-                bg_color = int(np.median(gray_frame[0:10, 0:10]))
-                padded_img = cv2.copyMakeBorder(
-                    letter_crop, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=bg_color
-                )
-                prep_img = cv2.resize(padded_img, (self.ki_w, self.ki_h), interpolation=cv2.INTER_AREA)
+                
+                # Warp the image to get a perfect 400x400 square of the letter
+                warped_bgr = warp_target(frame_bgr, detected_corners)
+                warped_gray = cv2.cvtColor(warped_bgr, cv2.COLOR_BGR2GRAY)
+                
+                # The warped image is exactly 400x400. 
+                # If the AI model expects 0.7 fill ratio, we can simulate padding by cropping a bit 
+                # or just padding it further. Let's provide the full warped image and resize it.
+                # Actually, in the old script, fill_ratio = 0.7 was used to ADD padding around the boundingRect.
+                # Since warp_target crops to the very edges of the paper, the letter is already surrounded by some white paper.
+                prep_img = cv2.resize(warped_gray, (self.ki_w, self.ki_h), interpolation=cv2.INTER_AREA)
 
                 prep_img_expanded = np.expand_dims(prep_img, axis=-1)
                 input_data = np.expand_dims(prep_img_expanded, axis=0)
