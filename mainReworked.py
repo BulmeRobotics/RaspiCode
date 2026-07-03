@@ -547,7 +547,7 @@ class CameraAIThread(threading.Thread):
                     return order_points(box)
         return None
 
-    def evaluate_color_target(self, picam2, samples=25, delay=0.03):
+    def evaluate_color_target(self, picam2, samples=15, delay=0.03):
         """Capture multiple frame samples to evaluate and vote on the target color status.
 
         Args:
@@ -791,7 +791,7 @@ class CameraAIThread(threading.Thread):
                         if label_str.upper() == "C":
                             detected_frame_label = "C"
                             print(f"[{self.side_code}] Kognitives Ziel erkannt (C). Confidence: {confidence:.3f}. Starte Farbauswertung...")
-                            color_result = self.evaluate_color_target(picam2, samples=25, delay=0.03)
+                            color_result = self.evaluate_color_target(picam2, samples=15, delay=0.03)
                             if color_result:
                                 if not self.enabled:
                                     print(f"[{self.side_code}] Wurde während Farbauswertung deaktiviert.")
