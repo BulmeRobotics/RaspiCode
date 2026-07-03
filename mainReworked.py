@@ -262,6 +262,9 @@ def calculate_victim_health(colors):
         status = "S"
     elif total_sum == 2:
         status = "H"
+    elif total_sum > 2:
+        status = "F"
+
 
     if yellow_count >= 5:
         status = "F"
@@ -487,7 +490,7 @@ class CameraAIThread(threading.Thread):
                 continue
 
             area = cv2.contourArea(cnt)
-            if area > 7000:                         # reverted from 7000 to 1000
+            if area > 1000:                         # reverted from 7000 to 1000
                 rect = cv2.minAreaRect(cnt)
                 box = cv2.boxPoints(rect)
                 box = np.int32(box)
@@ -700,7 +703,7 @@ class CameraAIThread(threading.Thread):
 
                 letter_crop = gray_frame[y_b:y_b + h_b, x_b:x_b + w_b]
 
-                fill_ratio = 0.6       #von 0.7 auf 0.55, testweise, für mehr rand wege Cogn Targets
+                fill_ratio = 0.7       #von 0.7 auf 0.55, testweise, für mehr rand wege Cogn Targets
                 max_dim = max(w_b, h_b)
                 target_dim = int(max_dim / fill_ratio)
                 pad_top = (target_dim - h_b) // 2
