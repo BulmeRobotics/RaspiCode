@@ -686,9 +686,7 @@ class CameraAIThread(threading.Thread):
                 _, total_sum = calculate_victim_health(colors)
                 mapped_val = total_sum + 3
                 ring_info = f"SUM={total_sum} -> Map={mapped_val}"
-                
-                # Show the unwarped square crop for visual inspection
-                cv2.imshow(f"Warped {self.side_code}", warped)
+                self.latest_warped_frame = warped
                 
                 # Draw small indicator text with colors
                 color_text = " | ".join(colors)
@@ -696,11 +694,7 @@ class CameraAIThread(threading.Thread):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 165, 0), 1)
             else:
                 self.alert_active = False
-                # Close the warped window if not detected to clean up the screen
-                try:
-                    cv2.destroyWindow(f"Warped {self.side_code}")
-                except Exception:
-                    pass
+                self.latest_warped_frame = None
 
             # --- DRAW INFO ON LIVE SCREEN ---
             if box_coords:
@@ -716,13 +710,11 @@ class CameraAIThread(threading.Thread):
             cv2.putText(display_frame, f"FPS: {self.fps:.1f}", (10, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
-            cv2.imshow(f"Kamera {self.side_code}", display_frame)
-            cv2.waitKey(1)
+            # Store display frame for main thread rendering
+            self.latest_display_frame = display_frame
 
         picam2.stop()
         self.status_pin.off()
-        if self.show_stream:
-            cv2.destroyWindow(f"Kamera {self.side_code}")
 
 
 # ==========================================
@@ -780,6 +772,41 @@ if __name__ == "__main__":
                 output_pin.on()
             else:
                 output_pin.off()
+
+            # Render Left Camera GUI
+            if cam_left.show_stream:
+                display_l = getattr(cam_left, "latest_display_frame", None)
+                if display_l is not None:
+                    cv2.imshow("Kamera L", display_l)
+                
+                warped_l = getattr(cam_left, "latest_warped_frame", None)
+                if warped_l is not None:
+                    cv2.imshow("Warped L", warped_l)
+                else:
+                    try:
+                        cv2.destroyWindow("Warped L")
+                    except Exception:
+                        pass
+
+            # Render Right Camera GUI
+            if cam_right.show_stream:
+                display_r = getattr(cam_right, "latest_display_frame", None)
+                if display_r is not None:
+                    cv2.imshow("Kamera R", display_r)
+                
+                warped_r = getattr(cam_right, "latest_warped_frame", None)
+                if warped_r is not None:
+                    cv2.imshow("Warped R", warped_r)
+                else:
+                    try:
+                        cv2.destroyWindow("Warped R")
+                    except Exception:
+                        pass
+
+            # WaitKey call must happen in the main thread
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("q gedrückt. Beende Debug-Modus...")
+                break
 
             time.sleep(0.01)
 
