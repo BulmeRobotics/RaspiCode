@@ -319,6 +319,8 @@ class CameraAIThread(threading.Thread):
         self.last_cog_detect_time = 0.0
         self.eval_start_time = 0.0
         self.eval_sums = []
+        self.latest_display_frame = None
+        self.latest_warped_frame = None
 
         # ToF Debouncing State
         self.tof_filtered = True
@@ -360,6 +362,8 @@ class CameraAIThread(threading.Thread):
         self.state = "SCANNING"
         self.cog_detect_count = 0
         self.eval_sums = []
+        self.latest_display_frame = None
+        self.latest_warped_frame = None
 
     def get_boundary_coords(self, img_shape, side=None):
         """Get the boundary coordinate configurations for detection exclusion.
@@ -756,11 +760,14 @@ class CameraAIThread(threading.Thread):
                 detected_corners = self.find_target_corners(frame_bgr, self.side_code)
                 if detected_corners is not None:
                     warped = warp_target(frame_bgr, detected_corners)
+                    self.latest_warped_frame = warped
                     colors = scan_target_colors(warped)
                     _, total_sum = calculate_victim_health(colors)
                     self.eval_sums.append(total_sum)
                     detected_label = f"Evaluating... SUM={total_sum}"
                     print(f"[{self.side_code}] Scan target colors SUM: {total_sum}")
+                else:
+                    self.latest_warped_frame = None
 
                 # Check if the 2-second evaluation window is complete
                 if current_time - self.eval_start_time >= 2.0:
@@ -786,6 +793,10 @@ class CameraAIThread(threading.Thread):
                     self.waiting_for_reset = True
                     self.alert_active = True
 
+            # Reset warped frame when not evaluating
+            if self.state == "SCANNING":
+                self.latest_warped_frame = None
+
             # --- GUI VISUALIZATION ---
             if self.show_stream:
                 color = (0, 255, 0) if self.state == "EVALUATING" else (0, 255, 255)
@@ -806,8 +817,9 @@ class CameraAIThread(threading.Thread):
                     pts = detected_corners.reshape((-1, 1, 2)).astype(np.int32)
                     cv2.polylines(display_frame, [pts], True, (255, 165, 0), 3)
 
-                cv2.imshow(f"Kamera {self.side_code}", display_frame)
-                cv2.waitKey(1)
+                self.latest_display_frame = display_frame
+            else:
+                self.latest_display_frame = None
 
             # --- WATCHDOG AUTO-RESET FOR SCANNING TIMEOUT ---
             if not self.enabled:
@@ -822,8 +834,6 @@ class CameraAIThread(threading.Thread):
 
         picam2.stop()
         self.status_pin.off()
-        if self.show_stream:
-            cv2.destroyWindow(f"Kamera {self.side_code}")
 
 
 # ==========================================
@@ -912,6 +922,39 @@ if __name__ == "__main__":
                     cam_left.reset_logic()
                     cam_right.reset_logic()
                     output_pin.off()
+
+            # Render Left Camera GUI
+            if cam_left.show_stream:
+                display_l = getattr(cam_left, "latest_display_frame", None)
+                if display_l is not None:
+                    cv2.imshow("Kamera L", display_l)
+                
+                warped_l = getattr(cam_left, "latest_warped_frame", None)
+                if warped_l is not None:
+                    cv2.imshow("Warped L", warped_l)
+                else:
+                    try:
+                        cv2.destroyWindow("Warped L")
+                    except Exception:
+                        pass
+
+            # Render Right Camera GUI
+            if cam_right.show_stream:
+                display_r = getattr(cam_right, "latest_display_frame", None)
+                if display_r is not None:
+                    cv2.imshow("Kamera R", display_r)
+                
+                warped_r = getattr(cam_right, "latest_warped_frame", None)
+                if warped_r is not None:
+                    cv2.imshow("Warped R", warped_r)
+                else:
+                    try:
+                        cv2.destroyWindow("Warped R")
+                    except Exception:
+                        pass
+
+            # waitKey call is mandatory in the main thread to process GUI events
+            cv2.waitKey(1)
 
             time.sleep(0.01)
 
