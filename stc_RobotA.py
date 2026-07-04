@@ -303,7 +303,7 @@ class CameraAIThread(threading.Thread):
         self.status_pin = DigitalOutputDevice(status_gpio_pin)
         self.status_pin.off()
 
-        # Detection counters
+        # Detection counters & state variables
         self.Counter_Harmed = 0
         self.Counter_Safe = 0
         self.Counter_Unharmed = 0
@@ -312,6 +312,13 @@ class CameraAIThread(threading.Thread):
         self.last_detection_time = 0.0
         self.TIMEOUT_DURATION = 2.0
         self.fps = 0.0
+
+        # Cognitive Target state variables
+        self.state = "SCANNING"
+        self.cog_detect_count = 0
+        self.last_cog_detect_time = 0.0
+        self.eval_start_time = 0.0
+        self.eval_sums = []
 
         # ToF Debouncing State
         self.tof_filtered = True
@@ -350,6 +357,9 @@ class CameraAIThread(threading.Thread):
         self.Counter_Harmed = self.Counter_Safe = self.Counter_Unharmed = 0
         self.frame_counter = 0
         self.last_detection_time = 0.0
+        self.state = "SCANNING"
+        self.cog_detect_count = 0
+        self.eval_sums = []
 
     def get_boundary_coords(self, img_shape, side=None):
         """Get the boundary coordinate configurations for detection exclusion.
@@ -453,9 +463,13 @@ class CameraAIThread(threading.Thread):
 
         gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        edges = cv2.Canny(blurred, 50, 150)
+        
+        # 1. Adaptive Thresholding (robust to shadows/uneven light)
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 5
+        )
 
-        # Clear edges in the angled cutoff zones
+        # Clear mask in the angled cutoff zones
         coords = self.get_boundary_coords(image_bgr.shape, side)
         pts_left = np.array([
             coords["left_auswurf_top"],
@@ -463,7 +477,7 @@ class CameraAIThread(threading.Thread):
             [coords["left_auswurf_bottom"][0], image_bgr.shape[0]],
             [0, image_bgr.shape[0]]
         ], dtype=np.int32)
-        cv2.fillPoly(edges, [pts_left], 0)
+        cv2.fillPoly(thresh, [pts_left], 0)
 
         pts_right = np.array([
             coords["right_auswurf_bottom"],
@@ -472,9 +486,9 @@ class CameraAIThread(threading.Thread):
             [image_bgr.shape[1], image_bgr.shape[0]],
             [coords["right_auswurf_bottom"][0], image_bgr.shape[0]]
         ], dtype=np.int32)
-        cv2.fillPoly(edges, [pts_right], 0)
+        cv2.fillPoly(thresh, [pts_right], 0)
 
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             return None
 
@@ -490,7 +504,16 @@ class CameraAIThread(threading.Thread):
                 continue
 
             area = cv2.contourArea(cnt)
-            if area > 1000:                         # reverted from 7000 to 1000
+            if area > 1000:
+                # 2. Polygon Approximation to find 4 corners
+                peri = cv2.arcLength(cnt, True)
+                approx = cv2.approxPolyDP(cnt, 0.04 * peri, True)
+                
+                if len(approx) == 4:
+                    pts = approx.reshape(4, 2)
+                    return order_points(pts)
+
+                # 3. Fallback to minAreaRect if approxPolyDP fails
                 rect = cv2.minAreaRect(cnt)
                 box = cv2.boxPoints(rect)
                 box = np.int32(box)
@@ -501,42 +524,8 @@ class CameraAIThread(threading.Thread):
                     continue
                 aspect_ratio = width / height
 
-                if 0.85 <= aspect_ratio <= 1.15:
+                if 0.75 <= aspect_ratio <= 1.25:
                     return order_points(box)
-        return None
-
-    def evaluate_color_target(self, picam2, samples=25, delay=0.03):
-        """Capture multiple frame samples to evaluate and vote on the target color status.
-
-        Args:
-            picam2 (Picamera2): The Picamera2 camera instance.
-            samples (int, optional): Number of frame samples to capture. Defaults to 25.
-            delay (float, optional): Inter-frame delay in seconds. Defaults to 0.03.
-
-        Returns:
-            str or None: The voted status 'H'/'S'/'U'/'F' if votes exist, else None.
-        """
-        votes = []
-        for i in range(samples):
-            try:
-                sample_rgb = picam2.capture_array()
-            except Exception:
-                continue
-            sample_rgb = cv2.rotate(sample_rgb, cv2.ROTATE_180)
-            sample_bgr = cv2.cvtColor(sample_rgb, cv2.COLOR_RGB2BGR)
-
-            detected_corners = self.find_target_corners(sample_bgr, self.side_code)
-            if detected_corners is not None:
-                warped = warp_target(sample_bgr, detected_corners)
-                colors = scan_target_colors(warped)
-                circle_status, _ = calculate_victim_health(colors)
-                if circle_status in ["H", "S", "U", "F"]:
-                    votes.append(circle_status)
-
-        if votes:
-            most = collections.Counter(votes).most_common(1)[0][0]
-            print(f"[{self.side_code}] Color-eval votes: {collections.Counter(votes)} -> {most}")
-            return most
         return None
 
     def run(self):
@@ -596,7 +585,7 @@ class CameraAIThread(threading.Thread):
             if tof and not self.tof_filtered:
                 self.status_pin.off()
                 self.alert_active = False
-                if self.frame_counter > 0:
+                if self.cog_detect_count > 0:
                     self.reset_logic()
                     print(f"[{self.side_code}] Wand verloren. Reset.")
                 time.sleep(0.05)
@@ -613,25 +602,6 @@ class CameraAIThread(threading.Thread):
                 last_fps_time = current_time
 
             frame_rgb = cv2.rotate(frame_rgb, cv2.ROTATE_180)
-
-            coords = self.get_boundary_coords(frame_rgb.shape, self.side_code)
-
-            # Prepare corner polygons (do not draw on image)
-            pts_left = np.array([
-                coords["left_auswurf_top"],
-                coords["left_auswurf_bottom"],
-                [coords["left_auswurf_bottom"][0], frame_rgb.shape[0]],
-                [0, frame_rgb.shape[0]]
-            ], dtype=np.int32)
-
-            pts_right = np.array([
-                coords["right_auswurf_bottom"],
-                coords["right_auswurf_top"],
-                [frame_rgb.shape[1], coords["right_auswurf_top"][1]],
-                [frame_rgb.shape[1], frame_rgb.shape[0]],
-                [coords["right_auswurf_bottom"][0], frame_rgb.shape[0]]
-            ], dtype=np.int32)
-
             frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
             coords = self.get_boundary_coords(frame_bgr.shape, self.side_code)
             cutoff_top_y = coords["top_y"]
@@ -655,187 +625,200 @@ class CameraAIThread(threading.Thread):
                 cv2.line(display_frame, ang_left_top, ang_left_bottom, (0, 0, 255), 2)
                 cv2.line(display_frame, ang_right_top, ang_right_bottom, (0, 0, 255), 2)
 
-            detected_frame_label = None
             box_coords = None
             detected_corners = None
+            detected_label = "Scanning..." if self.state == "SCANNING" else "Evaluating..."
 
-            # --- DETECTION 1: Letters ---
-            gray_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
-            total_area = gray_frame.shape[0] * gray_frame.shape[1]
+            # ==========================================
+            # STATE: SCANNING (TFLite Model detection)
+            # ==========================================
+            if self.state == "SCANNING":
+                # Prep boundary contours/polys for exclusion
+                pts_left = np.array([
+                    coords["left_auswurf_top"],
+                    coords["left_auswurf_bottom"],
+                    [coords["left_auswurf_bottom"][0], frame_rgb.shape[0]],
+                    [0, frame_rgb.shape[0]]
+                ], dtype=np.int32)
 
-            blurred = cv2.GaussianBlur(gray_frame, (7, 7), 0)
-            thresh = cv2.adaptiveThreshold(
-                blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 5
-            )
+                pts_right = np.array([
+                    coords["right_auswurf_bottom"],
+                    coords["right_auswurf_top"],
+                    [frame_rgb.shape[1], coords["right_auswurf_top"][1]],
+                    [frame_rgb.shape[1], frame_rgb.shape[0]],
+                    [coords["right_auswurf_bottom"][0], frame_rgb.shape[0]]
+                ], dtype=np.int32)
 
-            # Remove angled cutoffs from thresholded image
-            cv2.fillPoly(thresh, [pts_left], 0)
-            cv2.fillPoly(thresh, [pts_right], 0)
+                gray_frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2GRAY)
+                total_area = gray_frame.shape[0] * gray_frame.shape[1]
 
-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            valid_contours = [c for c in contours if 10 < cv2.contourArea(c) < total_area * 0.99]
-
-            square_contours = []
-            for c in valid_contours:
-                x_tmp, y_tmp, w_tmp, h_tmp = cv2.boundingRect(c)
-                if h_tmp == 0:
-                    continue
-
-                # Calculate center point
-                cx_tmp = x_tmp + (w_tmp // 2)
-                cy_tmp = y_tmp + (h_tmp // 2)
-
-                # Ignore if center point is out of boundary
-                if not self.is_in_boundary(cx_tmp, cy_tmp, gray_frame.shape, self.side_code):
-                    continue
-
-                if w_tmp < 100 or h_tmp < 100 or w_tmp > 360 or h_tmp > 360:        # reverted from 100 back to 60
-                    continue
-
-                aspect_ratio = w_tmp / float(h_tmp)
-                if 0.85 <= aspect_ratio <= 1.15:
-                    square_contours.append(c)
-
-            if square_contours:
-                largest_contour = max(square_contours, key=cv2.contourArea)
-                x_b, y_b, w_b, h_b = cv2.boundingRect(largest_contour)
-                box_coords = (x_b, y_b, w_b, h_b)
-
-                letter_crop = gray_frame[y_b:y_b + h_b, x_b:x_b + w_b]
-
-                fill_ratio = 0.7       #von 0.7 auf 0.55, testweise, für mehr rand wege Cogn Targets
-                max_dim = max(w_b, h_b)
-                target_dim = int(max_dim / fill_ratio)
-                pad_top = (target_dim - h_b) // 2
-                pad_bottom = target_dim - h_b - pad_top
-                pad_left = (target_dim - w_b) // 2
-                pad_right = target_dim - w_b - pad_left
-                bg_color = int(np.median(gray_frame[0:10, 0:10]))
-                padded_img = cv2.copyMakeBorder(
-                    letter_crop, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=bg_color
+                blurred = cv2.GaussianBlur(gray_frame, (7, 7), 0)
+                thresh = cv2.adaptiveThreshold(
+                    blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 5
                 )
-                prep_img = cv2.resize(padded_img, (self.ki_w, self.ki_h), interpolation=cv2.INTER_AREA)
 
-                prep_img_expanded = np.expand_dims(prep_img, axis=-1)
-                input_data = np.expand_dims(prep_img_expanded, axis=0)
+                # Remove angled cutoffs from thresholded image
+                cv2.fillPoly(thresh, [pts_left], 0)
+                cv2.fillPoly(thresh, [pts_right], 0)
 
-                if self.is_int8:
-                    scale, zero_point = self.input_details[0]["quantization"]
-                    input_data = (input_data.astype(np.float32) / scale + zero_point).astype(np.int8)
-                else:
-                    input_data = input_data.astype(np.float32)
+                contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                valid_contours = [c for c in contours if 10 < cv2.contourArea(c) < total_area * 0.99]
 
-                self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
-                self.interpreter.invoke()
-                output_data = self.interpreter.get_tensor(self.output_details[0]["index"])[0]
+                square_contours = []
+                for c in valid_contours:
+                    x_tmp, y_tmp, w_tmp, h_tmp = cv2.boundingRect(c)
+                    if h_tmp == 0:
+                        continue
 
-                if self.is_int8:
-                    out_scale, out_zero_point = self.output_details[0]["quantization"]
-                    scores = (output_data.astype(np.float32) - out_zero_point) * out_scale
-                else:
-                    scores = output_data
+                    # Calculate center point
+                    cx_tmp = x_tmp + (w_tmp // 2)
+                    cy_tmp = y_tmp + (h_tmp // 2)
 
-                best_class_id = np.argmax(scores)
-                confidence = scores[best_class_id]
+                    # Ignore if center point is out of boundary
+                    if not self.is_in_boundary(cx_tmp, cy_tmp, gray_frame.shape, self.side_code):
+                        continue
 
-                if confidence > MIN_CONFIDENCE_C:
-                    label_str = LABELS.get(best_class_id)
-                    if label_str and label_str.lower() != "background":
-                        if label_str.upper() == "C":
-                            detected_frame_label = "C"
-                            print(f"[{self.side_code}] Kognitives Ziel erkannt (C). Confidence: {confidence:.3f}. Starte Farbauswertung...")
-                            color_result = self.evaluate_color_target(picam2, samples=25, delay=0.03)
-                            if color_result:
-                                if not self.enabled:
-                                    print(f"[{self.side_code}] Wurde während Farbauswertung deaktiviert.")
-                                    continue
-                                self.serial_mgr.write(color_result, self.side_code)
-                                print(f"[{self.side_code}] Farbauswertung Ergebnis: {color_result} - gesendet. Warte auf <D>.")
-                                self.reset_logic()
-                                self.enabled = False
-                                self.waiting_for_reset = True
+                    if w_tmp < 100 or h_tmp < 100 or w_tmp > 360 or h_tmp > 360:
+                        continue
+
+                    aspect_ratio = w_tmp / float(h_tmp)
+                    if 0.85 <= aspect_ratio <= 1.15:
+                        square_contours.append(c)
+
+                if square_contours:
+                    largest_contour = max(square_contours, key=cv2.contourArea)
+                    x_b, y_b, w_b, h_b = cv2.boundingRect(largest_contour)
+                    box_coords = (x_b, y_b, w_b, h_b)
+
+                    letter_crop = gray_frame[y_b:y_b + h_b, x_b:x_b + w_b]
+
+                    fill_ratio = 0.7
+                    max_dim = max(w_b, h_b)
+                    target_dim = int(max_dim / fill_ratio)
+                    pad_top = (target_dim - h_b) // 2
+                    pad_bottom = target_dim - h_b - pad_top
+                    pad_left = (target_dim - w_b) // 2
+                    pad_right = target_dim - w_b - pad_left
+                    bg_color = int(np.median(gray_frame[0:10, 0:10]))
+                    padded_img = cv2.copyMakeBorder(
+                        letter_crop, pad_top, pad_bottom, pad_left, pad_right, cv2.BORDER_CONSTANT, value=bg_color
+                    )
+                    prep_img = cv2.resize(padded_img, (self.ki_w, self.ki_h), interpolation=cv2.INTER_AREA)
+
+                    prep_img_expanded = np.expand_dims(prep_img, axis=-1)
+                    input_data = np.expand_dims(prep_img_expanded, axis=0)
+
+                    if self.is_int8:
+                        scale, zero_point = self.input_details[0]["quantization"]
+                        input_data = (input_data.astype(np.float32) / scale + zero_point).astype(np.int8)
+                    else:
+                        input_data = input_data.astype(np.float32)
+
+                    self.interpreter.set_tensor(self.input_details[0]["index"], input_data)
+                    self.interpreter.invoke()
+                    output_data = self.interpreter.get_tensor(self.output_details[0]["index"])[0]
+
+                    if self.is_int8:
+                        out_scale, out_zero_point = self.output_details[0]["quantization"]
+                        scores = (output_data.astype(np.float32) - out_zero_point) * out_scale
+                    else:
+                        scores = output_data
+
+                    best_class_id = np.argmax(scores)
+                    confidence = scores[best_class_id]
+
+                    if confidence > MIN_CONFIDENCE_C:
+                        label_str = LABELS.get(best_class_id)
+                        if label_str and label_str.upper() == "C":
+                            # Temporal debounce: reset counter if previous C detection was too long ago
+                            if current_time - self.last_cog_detect_time > 1.5:
+                                self.cog_detect_count = 0
+                            
+                            self.cog_detect_count += 1
+                            self.last_cog_detect_time = current_time
+                            self.alert_active = True
+                            print(f"[{self.side_code}] Cognitive Target detected ({self.cog_detect_count}/3). Conf: {confidence:.3f}")
+
+                            if self.cog_detect_count >= 3:
+                                # Transition to EVALUATING state
+                                self.state = "EVALUATING"
+                                self.eval_start_time = current_time
+                                self.eval_sums = []
                                 self.alert_active = True
-                                continue
-                            else:
-                                print(f"[{self.side_code}] Farbauswertung lieferte kein Ergebnis.")
-                        else:
-                            detected_frame_label = label_str
+                                # Send stop signal to Arduino: e.g. <L> or <R>
+                                self.serial_mgr.write("", self.side_code)
+                                print(f"[{self.side_code}] Cognitive Target confirmed. Sent stop command <{self.side_code}>. Entering evaluation...")
 
-            # --- DETECTION 2: Color Rings ---
-            if not detected_frame_label:
+            # ==========================================
+            # STATE: EVALUATING (Concentric Rings Scan)
+            # ==========================================
+            elif self.state == "EVALUATING":
                 detected_corners = self.find_target_corners(frame_bgr, self.side_code)
                 if detected_corners is not None:
                     warped = warp_target(frame_bgr, detected_corners)
                     colors = scan_target_colors(warped)
-                    circle_status, _ = calculate_victim_health(colors)
-                    if circle_status in ["H", "S", "U"]:
-                        detected_frame_label = circle_status
+                    _, total_sum = calculate_victim_health(colors)
+                    self.eval_sums.append(total_sum)
+                    detected_label = f"Evaluating... SUM={total_sum}"
+                    print(f"[{self.side_code}] Scan target colors SUM: {total_sum}")
+
+                # Check if the 2-second evaluation window is complete
+                if current_time - self.eval_start_time >= 2.0:
+                    if self.eval_sums:
+                        voted_sum = collections.Counter(self.eval_sums).most_common(1)[0][0]
+                        print(f"[{self.side_code}] Evaluation complete. Voted SUM: {voted_sum} from {len(self.eval_sums)} frames.")
+                    else:
+                        voted_sum = 0
+                        print(f"[{self.side_code}] WARNING: No targets scanned during evaluation. Defaulting to SUM=0.")
+
+                    # Map sum to value 1..5
+                    # -2 -> 1, -1 -> 2, 0 -> 3, 1 -> 4, 2 -> 5
+                    voted_sum = max(-2, min(2, voted_sum))
+                    mapped_val = voted_sum + 3
+
+                    # Send result to serial: e.g. <L4> or <R3>
+                    self.serial_mgr.write(str(mapped_val), self.side_code)
+                    print(f"[{self.side_code}] Sent result <{self.side_code}{mapped_val}> to Arduino. Disabling camera.")
+
+                    # Enter waiting for reset state
+                    self.reset_logic()
+                    self.enabled = False
+                    self.waiting_for_reset = True
+                    self.alert_active = True
 
             # --- GUI VISUALIZATION ---
             if self.show_stream:
-                if detected_frame_label:
-                    color = (0, 255, 0)
-                    cv2.putText(
-                        display_frame,
-                        f"Erkannt: {detected_frame_label}",
-                        (10, cutoff_top_y + 30),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.9,
-                        color,
-                        2,
-                    )
+                color = (0, 255, 0) if self.state == "EVALUATING" else (0, 255, 255)
+                cv2.putText(
+                    display_frame,
+                    detected_label,
+                    (10, cutoff_top_y + 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.9,
+                    color,
+                    2,
+                )
 
-                    if box_coords:
-                        bx, by, bw, bh = box_coords
-                        cv2.rectangle(display_frame, (bx, by), (bx + bw, by + bh), color, 2)
-                    elif detected_corners is not None:
-                        pts = detected_corners.reshape((-1, 1, 2)).astype(np.int32)
-                        cv2.polylines(display_frame, [pts], True, (255, 165, 0), 3)
-                else:
-                    cv2.putText(
-                        display_frame,
-                        "Suche...",
-                        (10, cutoff_top_y + 30),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.9,
-                        (0, 0, 255),
-                        2,
-                    )
+                if box_coords:
+                    bx, by, bw, bh = box_coords
+                    cv2.rectangle(display_frame, (bx, by), (bx + bw, by + bh), color, 2)
+                elif detected_corners is not None:
+                    pts = detected_corners.reshape((-1, 1, 2)).astype(np.int32)
+                    cv2.polylines(display_frame, [pts], True, (255, 165, 0), 3)
 
                 cv2.imshow(f"Kamera {self.side_code}", display_frame)
                 cv2.waitKey(1)
 
-            # --- FILTERING & WATCHDOG ---
+            # --- WATCHDOG AUTO-RESET FOR SCANNING TIMEOUT ---
             if not self.enabled:
                 continue
 
-            if detected_frame_label:
-                self.last_detection_time = current_time
-                self.frame_counter += 1
-                self.alert_active = True
-                print(f"[{self.side_code}] Detektion: {detected_frame_label}")
-                if detected_frame_label == "H":
-                    self.Counter_Harmed += 1
-                elif detected_frame_label == "S":
-                    self.Counter_Safe += 1
-                elif detected_frame_label == "U":
-                    self.Counter_Unharmed += 1
-            else:
-                if self.last_detection_time > 0:
-                    elapsed_time = current_time - self.last_detection_time
-                    if elapsed_time > self.TIMEOUT_DURATION:
-                        self.reset_logic()
+            if self.state == "SCANNING":
+                if self.cog_detect_count > 0:
+                    if current_time - self.last_cog_detect_time > 3.0:
+                        print(f"[{self.side_code}] Scanning timeout. Resetting detection count.")
+                        self.cog_detect_count = 0
                         self.alert_active = False
-
-            # --- TRANSMIT RESULT ---
-            if self.frame_counter >= 10:
-                counts = {"H": self.Counter_Harmed, "S": self.Counter_Safe, "U": self.Counter_Unharmed}
-                cam_transmit = max(counts, key=counts.get)
-                self.serial_mgr.write(cam_transmit, self.side_code)
-                print(f"[{self.side_code}] Transfer abgeschlossen. Warte auf <R>.")
-                self.reset_logic()
-                self.enabled = False
-                self.waiting_for_reset = True
 
         picam2.stop()
         self.status_pin.off()
